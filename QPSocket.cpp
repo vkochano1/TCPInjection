@@ -48,6 +48,7 @@
     , cfg_(cfg)
    {
      recvIdx_ = 0;
+     sendIdx_ = 0;
    }
 
    void QPSocket::open()
@@ -68,7 +69,7 @@
                 }
                 else
                 {
-                    LOG("QP " << cfg_.flowName() << "moved to init");
+                    LOG("QP " << cfg_.flowName() << " moved to init");
                 }
         }
 
@@ -84,7 +85,7 @@
                 }
                 else
                 {
-                    LOG("QP " << cfg_.flowName() << "moved to  RTR");
+                    LOG("QP " << cfg_.flowName() << " moved to  RTR");
                 }
         }
         {
@@ -98,7 +99,7 @@
                 }
                 else
                 {
-                    LOG("QP " << cfg_.flowName() << "moved to  RTS");
+                    LOG("QP " << cfg_.flowName() << " moved to  RTS");
                 }
         }
 
@@ -110,7 +111,7 @@
 
    void QPSocket::initBuffers()
    {
-     memDomain_ = ibv_alloc_pd(device_);
+     protectionDomain_ = ibv_alloc_pd(device_);
 
      auto recvPortion = cfg_.recvEntrySize() * cfg_.numOfRecvBuffers();
      auto sendPortion = cfg_.sendEntrySize() * cfg_.numOfSendBuffers();
@@ -119,7 +120,7 @@
      recvBuf_  = reinterpret_cast<char*> (std::malloc(fullSize));
      sendBuf_  = recvBuf_ + recvPortion;
 
-     memRegion_ = ibv_reg_mr(memDomain_, recvBuf_, fullSize, IBV_ACCESS_LOCAL_WRITE);
+     memRegion_ = ibv_reg_mr(protectionDomain_, recvBuf_, fullSize, IBV_ACCESS_LOCAL_WRITE);
    }
 
    void QPSocket::initCompletionQueues()
@@ -140,6 +141,7 @@
    {
       postRecv( (recvIdx_++) % cfg_.numOfRecvBuffers());
    }
+
    void QPSocket::postRecv(size_t workID)
    {
         ibv_sge sg_entry;
@@ -264,7 +266,8 @@
         qp_attr.cap.max_send_sge = 1;
         qp_attr.cap.max_inline_data = cfg_.maxInlineSendSize();
 
-        queuePair_ = ibv_create_qp(memDomain_, &qp_attr);
+        queuePair_ = ibv_create_qp(protectionDomain_, &qp_attr);
+
         if (!queuePair_)
         {
           LOG_THROW(std::runtime_error, "Failed to create QP");
@@ -292,28 +295,38 @@
      int msgs_completed = ibv_poll_cq(sendCompletionQueue_, 1, &completion);
   }
 
-  void QPSocket::send(size_t len, const char* buf, size_t workID)
+
+  void QPSocket::sendNoCopy(const std::string_view& data, size_t workID)
   {
-        ibv_sge sg_entry_s;
-        ibv_exp_send_wr swr, *bad_swr = nullptr;
-        sg_entry_s.addr = reinterpret_cast<size_t>(buf);
-        sg_entry_s.length = len;
-        sg_entry_s.lkey = memRegion_->lkey;
+    ibv_sge sg_entry_s;
+    ibv_exp_send_wr swr, *bad_swr = nullptr;
+    sg_entry_s.addr = reinterpret_cast<size_t>(data.data());
+    sg_entry_s.length = data.size();
+    sg_entry_s.lkey = memRegion_->lkey;
 
-        memset(&swr, 0, sizeof(swr));
+    memset(&swr, 0, sizeof(swr));
 
-        swr.num_sge = 1;
-        swr.sg_list = &sg_entry_s;
-        swr.next = 0;
-        swr.exp_opcode = static_cast<ibv_exp_wr_opcode> (IBV_WR_SEND);
-        swr.wr_id = workID;
-        swr.exp_send_flags |=  IBV_EXP_SEND_IP_CSUM;
-        swr.exp_send_flags |=  IBV_SEND_SIGNALED;
+    swr.num_sge = 1;
+    swr.sg_list = &sg_entry_s;
+    swr.next = 0;
+    swr.exp_opcode = static_cast<ibv_exp_wr_opcode> (IBV_WR_SEND);
+    swr.wr_id = workID;
+    swr.exp_send_flags |=  IBV_EXP_SEND_IP_CSUM;
+    swr.exp_send_flags |=  IBV_SEND_SIGNALED;
 
-        int ret = ibv_exp_post_send(queuePair_, &swr, &bad_swr);
+    int ret = ibv_exp_post_send(queuePair_, &swr, &bad_swr);
 
-        if (ret != 0)
-        {
-          LOG_THROW(std::runtime_error, "Failed to post send");
-        }
+    if (ret != 0)
+    {
+      LOG_THROW(std::runtime_error, "Failed to post send");
+    }
+  }
+
+  void QPSocket::send(const std::string_view& data)
+  {
+        size_t bufIdx  = (sendIdx_++) % cfg_.numOfSendBuffers();
+        char* outBuf = sendBuf_ + bufIdx * cfg_.sendEntrySize();
+        std::memcpy(outBuf, data.data(), data.size());
+        std::string_view outData(outBuf, data.size());
+        sendNoCopy(outData, bufIdx);
   }

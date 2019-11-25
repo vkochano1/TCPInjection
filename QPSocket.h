@@ -51,7 +51,8 @@ public:
    bool pollRecv(size_t& workID, std::string_view& data);
 
 public:
-   void send(size_t len, const char* buf, size_t workID = 0);
+   void sendNoCopy(const std::string_view& data, size_t workID = 0);
+   void send(const std::string_view& data);
    void pollSend();
 
 protected:
@@ -62,7 +63,7 @@ protected:
 
 protected:
   Device& device_;
-  ibv_pd*  memDomain_;
+  ibv_pd*  protectionDomain_;
   ibv_mr*  memRegion_;
   ibv_cq*  recvCompletionQueue_;
   ibv_cq*  sendCompletionQueue_;
@@ -75,4 +76,5 @@ public:
 public:
   QPSocketCfg cfg_;
   size_t recvIdx_;
+  size_t sendIdx_;
 };

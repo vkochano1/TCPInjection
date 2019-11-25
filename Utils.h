@@ -1,4 +1,7 @@
 #pragma once
+#include <tins/utils/resolve_utils.h>
+#include <tins/packet_sender.h>
+#include <tins/network_interface.h>
 
 namespace Utils
 {
@@ -18,6 +21,11 @@ namespace Utils
     return  lo;
   }
 
+  inline Tins::HWAddress<6> resolveMAC(const Tins::IPv4Address& ip, const Tins::NetworkInterface& interface)
+  {
+    Tins::PacketSender sender(interface);
+    return Tins::Utils::resolve_hwaddr(interface, ip, sender);
+  }
 
   #define LOG(TEXT)\
     do { std::cerr << TEXT << std::endl;} while(0)

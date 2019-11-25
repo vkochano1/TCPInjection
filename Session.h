@@ -41,6 +41,27 @@ struct AlwaysValid
   constexpr bool validate(const ETH_HDR&) {return true;}
 };
 
+struct SomeReject
+{
+  SomeReject()
+  {
+    c_ = 1;
+  }
+  std::string_view reject() { return std::string_view("REJECTED");}
+  constexpr bool validate(const ETH_HDR&)
+  {
+       if (c_++ % 10000 == 0)
+       {
+        std::cerr << "Rejected" << std::endl;
+         return false;
+       }
+      return true;
+  }
+
+  int c_;
+};
+
+
 class OutStream : public Stream<OutSocket, InSocket, AlwaysValid>
 {
 public:
@@ -50,10 +71,10 @@ public:
   }
 };
 
-class InStream : public Stream<InSocket, OutSocket, AlwaysValid>
+class InStream : public Stream<InSocket, OutSocket, SomeReject>
 {
 public:
-  InStream(InSocket& out, OutSocket& in, AlwaysValid& validator)
+  InStream(InSocket& out, OutSocket& in, SomeReject& validator)
      : Stream(out,in, validator)
   {
   }
@@ -92,7 +113,7 @@ public:
     : device_(device)
     , in_(device,  sessionCfg.downstreamCfg_)
     , out_(device, sessionCfg.upstreamCfg_)
-    , inStream_(in_, out_, valid_)
+    , inStream_(in_, out_, valid2_)
     , outStream_(out_, in_, valid_)
   {
     in_.context().setTargetEndpoint(sessionCfg.target_);
@@ -120,6 +141,7 @@ public:
   InSocket  in_;
   OutSocket  out_;
   AlwaysValid valid_;
+  SomeReject valid2_;
   InStream inStream_;
   OutStream outStream_;
 };
