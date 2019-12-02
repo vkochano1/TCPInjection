@@ -1,132 +1,20 @@
 #pragma once
 
-#include <TcpStreamInfo.h>
 #include <queue>
+#include <vector>
+#include <PendingTraffic.h>
+#include <QPSocket.h>
+#include <TcpStreamInfo.h>
 
 
-struct InjectionDetails
-{
-    enum InjectionType
-    {
-      Added,
-      Reject
-    };
-
-    InjectionDetails()
-    {
-        mySequence_= 0;
-    }
-
-    InjectionDetails( InjectionType injectionType
-                    , uint32_t seq
-                   , std::string_view payload)
-    {
-      mySequence_ = seq;
-      payload_ = payload;
-      injectionType_ = injectionType;
-    }
-
-    InjectionType injectionType () const
-    {
-        return injectionType_;
-    }
-
-    uint32_t expectedAck() const
-    {
-      return mySequence_ + payloadSize();
-    }
-
-    uint32_t mySequence() const
-    {
-      return mySequence_;
-    }
-
-    uint32_t payloadSize() const
-    {
-      return payload_.size();
-    }
-
-    InjectionType injectionType_;
-    uint32_t mySequence_;
-    std::string_view payload_;
-};
-
-
-struct PendingInjections : protected std::deque<InjectionDetails>
-{
-
-  void processReceivedAck(size_t ackNum, uint32_t& bytesAcked, uint32_t& bytesRejectedAcked_)
-  {
-    while (!this->empty())
-    {
-      const auto& element = this->front();
-      if (ackNum < element.expectedAck())
-      {
-        break;
-      }
-      if (element.injectionType() == InjectionDetails::Added)
-        bytesAcked  += element.payloadSize();
-      else
-      {
-        bytesRejectedAcked_ += element.payloadSize();
-      }
-
-
-
-      this->pop_front();
-    }
-  }
-
-  uint32_t calculateSeqNumForDup(uint32_t inSeq, uint32_t bytesAlreadyAdded, uint32_t bytesAlreadyRejected)
-  {
-      uint32_t outSeq = inSeq + bytesAlreadyAdded - bytesAlreadyRejected;
-
-      for (auto it = this->rbegin(); it != rend(); ++it )
-      {
-          const auto& element = *it;
-
-          if (element.mySequence() > inSeq)
-          {
-            if (element.injectionType() == InjectionDetails::Added)
-              outSeq -= element.payloadSize();
-            else
-              outSeq += element.payloadSize();
-          }
-          else
-          {
-            break;
-          }
-      }
-      return outSeq;
-  }
-
-  bool hasPendingInjections() const  { return !this->empty();}
-
-  void clear()
-  {
-      while(!this->empty())
-      {
-         this->pop_front();
-      }
-  }
-
-  void addInjection(size_t seq, std::string_view payload)
-  {
-    this->push_back(InjectionDetails(InjectionDetails::Added, seq, payload));
-  }
-
-  void addRejection(size_t seq, std::string_view payload)
-  {
-    this->push_back(InjectionDetails(InjectionDetails::Reject, seq, payload));
-  }
-};
-
-
+template<typename SocketType>
 class Context
 {
-
 public:
-  Context()
+  Context(Context& reversePathContext, SocketType& inSocket, SocketType& outSocket)
+    : inSocket_  (inSocket)
+    , outSocket_  (outSocket)
+    , reversePathContext_(reversePathContext)
   {
     clear();
   }
@@ -138,30 +26,62 @@ public:
     bytesAdded_ = 0;
     bytesAddedAcked_ = 0;
     bytesRejectedAcked_ = 0;
-    maxAckSent_ = 0;
+    maxAckRecv_= 0;
     pendingInjections_.clear();
   }
 
-  PendingInjections&  pendingInjections () { return pendingInjections_; }
+  SocketType& inSocket()
+  {
+    return inSocket_;
+  }
+
+  SocketType& outSocket()
+  {
+    return outSocket_;
+  }
+
+  Context& reversePathContext()
+  {
+    return reversePathContext_;
+  }
+
+  const Context& reversePathContext() const
+  {
+    return reversePathContext_;
+  }
+
+  PendingInjections&  pendingInjections ()
+  {
+    return pendingInjections_;
+  }
+
+public:
 
   void processReceivedAck(uint32_t ackNum)
   {
     pendingInjections().processReceivedAck(ackNum, bytesAddedAcked_, bytesRejectedAcked_);
   }
 
-  uint32_t outSeq() const
+  uint32_t currentOutSeq() const
   {
     return expectedRecvSeq_ + bytesAdded_ - bytesRejected_;
   }
 
-  uint32_t ackSeq(ETH_HDR& hdr, Context& counter)
+  uint32_t currentOutAckSeq() const
   {
-    return  ntohl(hdr.ackNum) - counter.bytesAddedAcked_ + counter.bytesRejectedAcked_;
+    return  maxAckRecv_ - reversePathContext().bytesAddedAcked_ + reversePathContext().bytesRejectedAcked_;
   }
 
-  void updateRecvNormal(ETH_HDR& hdr)
+  void updateRecvNormal(uint32_t payloadRecv, uint32_t ackReceived)
   {
-    expectedRecvSeq_ += hdr.tcpLen();
+    expectedRecvSeq_ += payloadRecv;
+  }
+
+  void updateOnRecv(uint32_t payloadRecv, uint32_t ackReceived)
+  {
+    maxAckRecv_ = std::max(maxAckRecv_, ackReceived);
+
+    LOG("RECEIVED, NEEDED ACK for  " << expectedRecvSeq_ + payloadRecv << " ack to send " << currentOutAckSeq() );
   }
 
   void updateRecvForSyn(ETH_HDR& hdr)
@@ -169,51 +89,68 @@ public:
     expectedRecvSeq_ += 1;
   }
 
-  void updateReject(const ETH_HDR& h)
+  void commitReject(uint32_t lenRecv)
   {
-    bytesRejected_ += h.tcpLen();
-
-
-    //bytesRejectedAcked_ += h.tcpLen();
-
-    std::string_view tmp (nullptr, h.tcpLen());
-    pendingInjections().addRejection(outSeq(), tmp);
+    bytesRejected_ += lenRecv;
   }
 
-  void updateAdded(std::string_view addon)
+  void updateReject(std::string_view payload, std::string_view rejPayload, uint32_t seqOffset, uint32_t bytesProcessed)
   {
-    pendingInjections().addInjection(outSeq(), addon);
-    bytesAdded_ += addon.length();
+    bool dontChange = false;
+    uint32_t rejPayloadSeq = reversePathContext().currentOutSeq();
+    if (reversePathContext().maxAckRecv_ == currentOutSeq() + seqOffset)
+    {
+      LOG("Immediate reject");
+      bytesRejectedAcked_ += payload.length();
+      dontChange = true;
+    }
+    else
+    {
+      LOG("Delayed reject");
+    }
+
+    uint32_t cutOffSeq = currentOutSeq() + seqOffset;
+    uint32_t origSeq = currentOutSeq() + bytesProcessed;
+
+    LOG("REJ data cut off seq"  << cutOffSeq );
+
+    pendingInjections().addRejection(cutOffSeq, payload, rejPayloadSeq, rejPayload, dontChange, origSeq);
   }
+
+  void setTargetEndpoint(const EndPoint& ep)
+  {
+    target_ = ep;
+  }
+
+  bool processingDup(ETH_HDR& hdr)
+  {
+    if (expectedRecvSeq_ >  ntohl(hdr.seqNum))
+    {
+          LOG("DUP " <<  ntohl(hdr.seqNum) << " ,  "<< expectedRecvSeq_);
+          return true;
+    }
+    return false;
+  }
+
+private:
 
   static void fillInfo(ETH_HDR& ethernetPkt,  const TcpStreamInfo& streamInfo)
   {
-    streamInfo.fillSourceIP(ethernetPkt.src_ip);
-    streamInfo.fillDestIP(ethernetPkt.dst_ip);
+    streamInfo.fillSourceIP(&ethernetPkt.src_ip[0]);
+    streamInfo.fillDestIP(&ethernetPkt.dst_ip[0]);
 
-    streamInfo.fillSourceMAC(ethernetPkt.src_mac);
-    streamInfo.fillDestMAC(ethernetPkt.dst_mac);
+    streamInfo.fillSourceMAC(&ethernetPkt.src_mac[0]);
+    streamInfo.fillDestMAC(&ethernetPkt.dst_mac[0]);
 
     streamInfo.fillSourcePort(ethernetPkt.sp);
     streamInfo.fillDestPort(ethernetPkt.dp);
   }
 
-  void prepare(std::string_view& data, Context& c, const TcpStreamInfo& streamInfo )
-  {
-      ETH_HDR* h  = (struct ETH_HDR*) data.data();
-      fillInfo(*h, streamInfo);
-
-      h->seqNum = htonl(outSeq());
-      maxAckSent_ =   std::max(maxAckSent_, ackSeq(*h, c));
-      h->ackNum = htonl(maxAckSent_);
-  }
-
-  static void prepareAddedPayload(const std::string_view& payload
+  static void prepareOutPayloadImpl (const std::string_view& payload
                   , const TcpStreamInfo& streamInfo
                   , uint32_t seqNum
                   , uint32_t ackNum
-                  , char*  outBuf
-                  , size_t& bytes)
+                  , std::string_view& outData)
   {
        TCPPacket pkt;
        pkt.setSrcIP(streamInfo.sourceIP().to_string());
@@ -235,86 +172,190 @@ public:
 
        auto serialized = pkt.ether().serialize();
 
-       std::memcpy(outBuf,&serialized[0], serialized.size());
-       bytes = serialized.size();
-  }
-
-  void setTargetEndpoint(const EndPoint& ep)
-  {
-    target_ = ep;
-  }
-
-  bool processingDup(ETH_HDR& hdr, size_t& diff)
-  {
-    if (expectedRecvSeq_ >  ntohl(hdr.seqNum))
-    {
-          LOG("DUP " <<  ntohl(hdr.seqNum) << " , "<< expectedRecvSeq_);
-          diff = expectedRecvSeq_ -  ntohl(hdr.seqNum);
-          return true;
-    }
-    return false;
-  }
-
-  void prepareDup(std::string_view& data, Context& c, const TcpStreamInfo& streamInfo, size_t diff )
-  {
-      /*if (pendingInjections().hasPendingInjections())
-      {
-        std::cerr << "Pending injections !!!!";
-        std::exit(-1);
-      }
-      else
-      {
-        std::cerr << "Trying to proceed" << std::endl;
-      }*/
-
-
-      ETH_HDR* h  = (struct ETH_HDR*) data.data();
-      uint32_t recvSeq = ntohl(h->seqNum);
-      uint32_t passThrSeq = recvSeq + bytesAdded_ + bytesRejected_;
-      uint32_t newSeq = pendingInjections().calculateSeqNumForDup(recvSeq, bytesAdded_, bytesRejected_);
-
-      std::cerr << "Received seq " << recvSeq << " calculated seq " << newSeq <<" pass thr seq " << passThrSeq << " " << pendingInjections().hasPendingInjections() ;
-
-      fillInfo(*h, streamInfo);
-
-      h->seqNum = htonl(passThrSeq);
-      maxAckSent_ =   std::max(maxAckSent_, ackSeq(*h, c));
-      h->ackNum = htonl(maxAckSent_);
+       std::memcpy(const_cast<char*>(outData.data()), &serialized[0], serialized.size());
+       outData.remove_suffix(outData.size() - serialized.size());
   }
 
 public:
-  uint32_t expectedRecvSeq_;
+  void sendPayload(const std::string_view& payload, bool noSend = false)
+  {
+    std::string_view out = outSocket().reserveSendBuf();
+    prepareAddedPayload(payload, out);
+
+    if (!noSend )
+    {
+      outSocket().sendNoCopy(out);
+      outSocket().pollSend();
+    }
+  }
+
+  void sendPassPayload(const std::string_view& payload, uint32_t& seqOffset, bool noSend = false)
+  {
+    std::string_view out = outSocket().reserveSendBuf();
+    preparePassPayload(payload, seqOffset, out);
+
+    if (!noSend)
+    {
+      outSocket().sendNoCopy(out);
+      outSocket().pollSend();
+    }
+  }
+
+  void sendPassPayloadNoCopy(std::string_view& payload)
+  {
+    preparePassPayloadNoCopy(payload);
+    /// !!! Need to use the original QP, bz of the protection domain
+    inSocket().sendNoCopy(payload);
+    inSocket().pollSend();
+  }
+
+  void sendPassPayloadNoCopyOrigSeqNums(const std::string_view& data)
+  {
+    ETH_HDR& ethernetPkt  = const_cast<ETH_HDR&> (*reinterpret_cast<const ETH_HDR*> (data.data()));
+    fillInfo(ethernetPkt, outTcp_);
+
+    inSocket().sendNoCopy(data);
+    inSocket().pollSend();
+  }
+
+  void sendExactPayload(const std::string_view& payload, uint32_t seq)
+  {
+    std::string_view out = outSocket().reserveSendBuf();
+    prepareSequencedPayload(payload,seq, out);
+    outSocket().sendNoCopy(out);
+    outSocket().pollSend();
+  }
+public:
+
+  void processDup(std::string_view data)
+  {
+    std::vector<InjectionDetails> rejectedIntervals;
+
+    ETH_HDR* hdr = (ETH_HDR*) data.data();
+
+    uint32_t recvSeq = ntohl(hdr->seqNum);
+    uint32_t outSeq = pendingInjections().calculateSeqNumForDup(recvSeq, bytesAdded_, bytesRejected_, rejectedIntervals);
+
+    std::string_view dupData( hdr->data(), hdr->tcpLen());
+
+    uint32_t dataProcessed = 0;
+    uint32_t passDataAdded = 0;
+
+    for (const auto& rejectedInterval : rejectedIntervals)
+    {
+      uint32_t intervalOrigSeqNum = rejectedInterval.myOrigSequence();
+
+      if (intervalOrigSeqNum > outSeq + dataProcessed)
+      {
+          uint32_t toPassIntervalLen = intervalOrigSeqNum - outSeq - dataProcessed;
+          uint32_t toPassDataOutSequence = outSeq + passDataAdded;
+
+          std::string_view toReplay = dupData.substr(dataProcessed, toPassIntervalLen);
+          sendExactPayload(toReplay, toPassDataOutSequence);
+          dataProcessed += toReplay.size();
+          passDataAdded += toReplay.size();
+          LOG("Passthrough data:" << toReplay);
+      }
+
+      LOG("Rejected data:" << rejectedInterval.payload());
+      reversePathContext().sendExactPayload(rejectedInterval.rejPayload(), rejectedInterval.rejSeq());
+      dataProcessed += rejectedInterval.payload().size();
+    }
+
+    LOG ("Last passthrough data:" << dataProcessed  << " , len " <<  dupData.length());
+    if (dataProcessed < dupData.length() )
+    {
+      std::string_view toReplay = dupData.substr(dataProcessed);
+      LOG("Final pass through " << toReplay );
+
+      sendExactPayload(toReplay, outSeq + passDataAdded);
+    }
+  }
+
+protected:
+  void prepareAddedPayload (const std::string_view& payload, std::string_view& outData)
+  {
+      prepareSequencedPayload(payload,  currentOutSeq(), outData);
+
+      if (payload.length())
+      {
+        pendingInjections().addInjection(currentOutSeq(), payload);
+        bytesAdded_ += payload.length();
+      }
+  }
+
+  void preparePassPayload (const std::string_view& payload, uint32_t& seqOffset, std::string_view& outData)
+  {
+      prepareSequencedPayload(payload, currentOutSeq() + seqOffset,  outData );
+
+      seqOffset += payload.length();
+  }
+
+  void prepareSequencedPayload (const std::string_view& payload,  uint32_t outSeqeunce, std::string_view& outData)
+  {
+      prepareOutPayloadImpl(payload
+                           , outTcp_
+                           , outSeqeunce
+                           , currentOutAckSeq()
+                           , outData);
+  }
+
+  void preparePassPayloadNoCopy(std::string_view& data)
+  {
+      ETH_HDR& ethernetPkt  = const_cast<ETH_HDR&> (*reinterpret_cast<const ETH_HDR*> (data.data()));
+      fillInfo(ethernetPkt, outTcp_);
+      ethernetPkt.seqNum = htonl(currentOutSeq());
+      ethernetPkt.ackNum = htonl(currentOutAckSeq());
+  }
+
+protected:
   uint32_t bytesRejected_;
   uint32_t bytesRejectedAcked_;
 
+protected:
   uint32_t bytesAdded_;
   uint32_t bytesAddedAcked_;
-  uint32_t maxAckSent_;
+
+protected:
+  uint32_t expectedRecvSeq_;
+
+public:
+  mutable uint32_t maxAckRecv_;
 
 public:
   TcpStreamInfo inTcp_;
   TcpStreamInfo outTcp_;
   EndPoint      target_;
-
   PendingInjections  pendingInjections_;
+  SocketType& inSocket_;
+  SocketType& outSocket_;
+  Context& reversePathContext_;
 };
 
 
-class InContext : public Context
+class InContext : public Context<QPSocket>
 {
 public:
   using PendingConnections = std::unordered_map<uint32_t, uint32_t>;
+  using Base = Context<QPSocket>;
 public:
 
-  bool processingSYN(ETH_HDR& hdr, size_t bytes, Context& counter)
+  InContext (Base& reversePathContext, QPSocket& inSocket, QPSocket& outSocket)
+  : Base(reversePathContext, inSocket, outSocket)
+  {
+
+  }
+
+  bool processingSYN(ETH_HDR& hdr, uint32_t bytes)
   {
     if(hdr.f.syn())
     {
-      LOG("SYN RECEIVED");
+      LOG("SYN Received");
 
       clear();
 
-      TCPDumper dumper(reinterpret_cast<char*> (&hdr), bytes);
+      std::string_view pkt (reinterpret_cast<char*> (&hdr), bytes);
+      TCPPacket dumper(pkt);
 
 
       inTcp_.init(dumper.ether().src_addr(), dumper.ether().dst_addr(),
@@ -322,19 +363,18 @@ public:
                   dumper.tcp().sport(), dumper.tcp().dport()
                 );
 
-      outTcp_.init(dumper.ether().dst_addr(), target_.outMac_,//dumper.ether().src_addr(),
-                   dumper.ip().dst_addr(), target_.outIP_, // dumper.ip().src_addr(),
+      outTcp_.init(dumper.ether().dst_addr(), target_.outMac_,
+                   dumper.ip().dst_addr(), target_.outIP_,
                    dumper.tcp().sport(), target_.outPort_
                  );
 
-
-      counter.outTcp_.init(dumper.ether().dst_addr(), dumper.ether().src_addr(),
+      reversePathContext().outTcp_.init(dumper.ether().dst_addr(), dumper.ether().src_addr(),
                               dumper.ip().dst_addr(), dumper.ip().src_addr(),
                               dumper.tcp().dport(), dumper.tcp().sport()
                             );
 
 
-      counter.inTcp_.init(target_.outMac_, dumper.ether().dst_addr(),
+      reversePathContext().inTcp_.init(target_.outMac_, dumper.ether().dst_addr(),
                            target_.outIP_, dumper.ip().dst_addr(),
                            target_.outPort_, dumper.tcp().sport()
                          );
@@ -347,18 +387,25 @@ public:
     return false;
   }
 
-
 };
 
 
-class OutContext : public Context
+class OutContext : public Context<QPSocket>
 {
 public:
-  bool processingSYN(ETH_HDR& hdr, size_t bytes, Context& counter)
+
+  using Base = Context<QPSocket>;
+
+  OutContext (Base& reversePathContext, QPSocket& inSocket, QPSocket& outSocket)
+  : Base (reversePathContext, inSocket, outSocket)
+  {
+  }
+
+  bool processingSYN(ETH_HDR& hdr, uint32_t bytes)
   {
     if(hdr.f.syn() && hdr.f.ack())
     {
-      LOG("SYN ACK Received. session is established");
+      LOG("SYN ACK Received. Session is established");
       clear();
       expectedRecvSeq_ = ntohl(hdr.seqNum);
       return true;

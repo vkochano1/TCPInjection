@@ -9,31 +9,6 @@
 #include <TCPStream.h>
 
 
-class InSocket : public QPSocket
-{
- public:
-   InSocket(Device& device, const QPSocketCfg& cfg)
-    : QPSocket(device, cfg)
-
-   {
-   }
-
-  InContext& context() { return context_;}
-  InContext context_;
-};
-
-class OutSocket : public QPSocket
-{
- public:
-   OutSocket(Device& device, const QPSocketCfg& cfg)
-    : QPSocket(device, cfg)
-
-   {
-   }
-
-  OutContext& context() { return context_;}
-  OutContext context_;
-};
 
 struct AlwaysValid
 {
@@ -47,10 +22,10 @@ struct SomeReject
   {
     c_ = 1;
   }
-  std::string_view reject() { return std::string_view("REJECTED");}
+  std::string_view reject() { static std::string_view s ("REJECTED"); return s;}
   constexpr bool validate(const ETH_HDR&)
   {
-       if (c_++ % 10000 == 0)
+       if (c_++ % 2 == 0)
        {
         std::cerr << "Rejected" << std::endl;
          return false;
@@ -62,20 +37,20 @@ struct SomeReject
 };
 
 
-class OutStream : public Stream<OutSocket, InSocket, AlwaysValid>
+class OutStream : public Stream<OutContext,AlwaysValid>
 {
 public:
-  OutStream(OutSocket& out, InSocket& in, AlwaysValid& validator)
-     : Stream(out,in, validator)
+  OutStream(OutContext& context, AlwaysValid& validator)
+     : Stream(context, validator)
   {
   }
 };
 
-class InStream : public Stream<InSocket, OutSocket, SomeReject>
+class InStream : public Stream<InContext, SomeReject>
 {
 public:
-  InStream(InSocket& out, OutSocket& in, SomeReject& validator)
-     : Stream(out,in, validator)
+  InStream(InContext& context, SomeReject& validator)
+     : Stream(context, validator)
   {
   }
 };
@@ -113,10 +88,12 @@ public:
     : device_(device)
     , in_(device,  sessionCfg.downstreamCfg_)
     , out_(device, sessionCfg.upstreamCfg_)
-    , inStream_(in_, out_, valid2_)
-    , outStream_(out_, in_, valid_)
+    , inContext_(outContext_, in_, out_)
+    , outContext_(inContext_, out_, in_)
+    , inStream_(inContext_, valid2_)
+    , outStream_(outContext_, valid_)
   {
-    in_.context().setTargetEndpoint(sessionCfg.target_);
+    inContext_.setTargetEndpoint(sessionCfg.target_);
     LOG(sessionCfg.downstreamCfg_);
     LOG(sessionCfg.upstreamCfg_);
   }
@@ -138,10 +115,16 @@ public:
 
 public:
   Device& device_;
-  InSocket  in_;
-  OutSocket  out_;
+
+  QPSocket  in_;
+  QPSocket  out_;
+
   AlwaysValid valid_;
   SomeReject valid2_;
+
+  InContext inContext_;
+  OutContext outContext_;
+
   InStream inStream_;
   OutStream outStream_;
 };

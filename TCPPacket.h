@@ -4,49 +4,6 @@
 #include <tins/tins.h>
 #include <iostream>
 
-class TCPDumper
-{
-public:
-  TCPDumper(const char* buf, size_t len)
-   : ether_(buf, len)
-   , tcp_( ether_.rfind_pdu<Tins::TCP>())
-   , ip_ ( ether_.rfind_pdu<Tins::IP> ())
-  {
-    data_ = tcp_.find_pdu<Tins::RawPDU>();
-  }
-
-  void dump(std::ostream& ostrm)
-  {
-    ostrm << "ETH: " <<  " Source:" << ether_.src_addr()
-                      << ",Dest:"   << ether_.dst_addr()
-                      << std::endl;
-
-    ostrm << "TCP: " << " Source:" << ip_.src_addr() << ":" << tcp_.sport()
-		      << ",Dest:"   << ip_.dst_addr() << ":" << tcp_.dport()
-          << ",Flags:"  << "S" << (bool)tcp_.get_flag(Tins::TCP::Flags::SYN)
-                                   << "A" << (bool)tcp_.get_flag(Tins::TCP::Flags::ACK)
-                                   << "F" << (bool)tcp_.get_flag(Tins::TCP::Flags::FIN)
-                                   << "R" << (bool)tcp_.get_flag(Tins::TCP::Flags::RST)
-           << "Seq:"     << "seq:" <<tcp_.seq() <<"," << "ack:" << tcp_.ack_seq();
-   if(data_)
-   {
-     ostrm << "Payload: " << std::string((const char*) &data_->payload()[0], data_->payload_size());
-   }
-
-   ostrm << std::endl;
-  }
-
-  const Tins::EthernetII& ether () const {return ether_;};
-  const Tins::TCP&        tcp() const {return tcp_;};
-  const Tins::IP&         ip() const {return ip_;}
-
-public:
-
-  Tins::EthernetII ether_;
-  Tins::TCP&        tcp_;
-  Tins::IP&         ip_;
-  Tins::RawPDU*     data_;
-};
 
 class TCPPacket
 {
@@ -65,16 +22,12 @@ public:
     pkt_.inner_pdu(ip_);
   }
 
-  TCPPacket(TCPDumper& dumper)
+  TCPPacket(std::string_view& data)
+   : pkt_((uint8_t*) (data.data()), data.size())
+   , tcp_( &pkt_.rfind_pdu<Tins::TCP>())
+   , ip_ ( &pkt_.rfind_pdu<Tins::IP> ())
   {
-    data_ = new Tins::RawPDU("");
-    ip_ = new Tins::IP(dumper.ip());
-    tcp_ = new Tins::TCP(dumper.tcp());
-    //cp_->flags(Tins::TCP::Flags::PSH);
-
-    tcp_->inner_pdu(data_);
-    ip_->inner_pdu(tcp_);
-    pkt_.inner_pdu(ip_);
+    data_ = tcp_->find_pdu<Tins::RawPDU>();
   }
 
   void setSrcMAC (const std::string& addr)
@@ -126,10 +79,31 @@ public:
     tcp_->seq(num);
   }
 
+  void dump(std::ostream& ostrm)
+  {
+      ostrm << "ETH: " <<  " Source:" << pkt_.src_addr()
+                        << ",Dest:"   << pkt_.dst_addr()
+                        << std::endl;
+
+      ostrm << "TCP: " << " Source:" << ip_->src_addr() << ":" << tcp_->sport()
+  		      << ",Dest:"   << ip_->dst_addr() << ":" << tcp_->dport()
+            << ",Flags:"  << "S" << (bool)tcp_->get_flag(Tins::TCP::Flags::SYN)
+                                     << "A" << (bool)tcp_->get_flag(Tins::TCP::Flags::ACK)
+                                     << "F" << (bool)tcp_->get_flag(Tins::TCP::Flags::FIN)
+                                     << "R" << (bool)tcp_->get_flag(Tins::TCP::Flags::RST)
+             << "Seq:"     << "seq:" << tcp_->seq() <<"," << "ack:" << tcp_->ack_seq();
+     if(data_)
+     {
+       ostrm << "Payload: " << std::string_view((const char*) &data_->payload()[0], data_->payload_size());
+     }
+
+     ostrm << std::endl;
+  }
+
   Tins::IP& ip() {return *ip_;}
   Tins::TCP& tcp() {return *tcp_;}
-
   Tins::EthernetII& ether() {return pkt_;}
+private:
   Tins::EthernetII pkt_;
   Tins::IP* ip_;
   Tins::TCP* tcp_;

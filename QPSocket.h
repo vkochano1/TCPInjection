@@ -1,4 +1,6 @@
 
+#pragma once
+
 #include <cstdlib>
 #include <cstring>
 #include <unistd.h>
@@ -16,6 +18,7 @@
 
 
 
+
 struct ibv_context;
 struct ibv_pd;
 struct ibv_mr;
@@ -29,6 +32,8 @@ class Device final
    Device(const std::string& deviceName = std::string());
 
    operator ibv_context* ();
+   operator const ibv_context* () const;
+   
    const std::string& deviceName() const;
    ibv_context* context();
 private:
@@ -53,6 +58,7 @@ public:
 public:
    void sendNoCopy(const std::string_view& data, size_t workID = 0);
    void send(const std::string_view& data);
+   std::string_view reserveSendBuf();
    void pollSend();
 
 protected:

@@ -29,7 +29,7 @@ QPSocketCfg::QPSocketCfg(const std::string& flowName)
   portNum_ = 1;
 }
 
-void QPSocketCfg::dump(std::ostream& out)
+void QPSocketCfg::dump(std::ostream& out) const
 {
     out << "Number of RCV buffers: " << numOfRecvBuffers () << std::endl;
     out << "Number of SND buffers: " << numOfSendBuffers () << std::endl;

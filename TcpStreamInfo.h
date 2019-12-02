@@ -68,32 +68,32 @@ public:
     }
 
 public:
-    void fillSourceIP(char* buf)
+    void fillSourceIP(unsigned char* buf) const
     {
        *reinterpret_cast<uint32_t*>(buf)  = sourceIPRaw_;
     }
 
-    void fillDestIP(char* buf)
+    void fillDestIP(unsigned char* buf) const
     {
       *reinterpret_cast<uint32_t*>(buf)  = destIPRaw_;
     }
 
-    void fillSourceMAC(char* buf)
+    void fillSourceMAC(unsigned char* buf) const
     {
        std::memcpy(buf, &sourceMACRaw_[0], sizeof(sourceMACRaw_));
     }
 
-    void fillDestMAC(char* buf)
+    void fillDestMAC(unsigned char* buf) const
     {
       std::memcpy(buf, &destMACRaw_[0], sizeof(destMACRaw_));
     }
 
-    void fillSourcePort(uint16_t& sp)
+    void fillSourcePort(uint16_t& sp) const
     {
       sp = sourcePortRaw_;
     }
 
-    void fillDestPort(uint16_t& dp)
+    void fillDestPort(uint16_t& dp) const
     {
       dp = destPortRaw_;
     }

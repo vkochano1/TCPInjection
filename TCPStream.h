@@ -2,52 +2,53 @@
 
 #include <TcpStreamContext.h>
 
-template<typename InSocketType, typename OutSocketType, typename PayloadProcessor>
+template<typename ContextType, typename PayloadProcessor>
 class Stream
 {
 public:
-  Stream(InSocketType& in, OutSocketType& out, PayloadProcessor& processor)
-     : in_(in)
-     , out_(out)
-     , processor_ (processor)
+  Stream(ContextType& context, PayloadProcessor& processor)
+     : context_(context)
+     , processor_(processor)
   {
   }
 
-  void reject(std::string_view data, std::string_view addon)
+  ContextType& context()
   {
-    /// 1. empty frame with transformed ack
-    ETH_HDR* h  = (ETH_HDR*) data.data();
-    in_.context().prepare(data, out_.context(),in_.context().outTcp_);
+    return context_;
+  }
 
-    TCPDumper dumper(data.data(), data.size());
-    TCPPacket pkt(dumper);
+  void reject(std::string_view data, uint32_t lenRecv,  std::string_view addon)
+  {
+     /// 1. empty frame with transformed ack
+     static  size_t c = 0;
+     bool noSend = false;
+     if (c++ % 2 == 1)
+     {
+        noSend = true;
+        LOG("Don't send. Emulating re-transmits");
+     }
 
-    pkt.setData("", 0);
-    auto serialized = pkt.ether().serialize();
+    ETH_HDR* h = (ETH_HDR*) data.data();
 
-    //std::memcpy(in_.sendBuf_,&serialized[0], serialized.size());
-    std::string_view out (&serialized[0], serialized.size());
+    auto payload  = std::string_view(h->data(), h->tcpLen());
+    auto pass1 = payload.substr(0,5);
+    auto toRej1 = payload.substr(5, 10);
+    auto pass2 = payload.substr(15, 5);
+    auto toRej2 = payload.substr(20, 5);
+    auto pass3 = payload.substr(25);
 
-    in_.send(out);
-    in_.pollSend();
+    uint32_t seqOffset = 0;
+    context().sendPassPayload(pass1, seqOffset, noSend);
+    context().updateReject(toRej1, addon, seqOffset, pass1.size());
+    context().reversePathContext().sendPayload(addon, noSend);
 
+    context().sendPassPayload(pass2, seqOffset, noSend);
+    context().updateReject(toRej2, addon ,seqOffset, pass1.size() + toRej1.size() + pass2.size());
+    context().reversePathContext().sendPayload(addon, noSend);
 
+    context().sendPassPayload( pass3, seqOffset, noSend);
 
-   /// 2. for rejected packet
-    in_.context().updateReject(*h);
-
-
-    size_t written = 0;
-    out_.context().prepareAddedPayload(addon
-                              , out_.context().outTcp_, out_.context().outSeq()
-                              , out_.context().maxAckSent_, out_.sendBuf_
-                              , written);
-
-    std::string_view outNC(out_.sendBuf_, written);
-    out_.sendNoCopy(outNC);
-    out_.pollSend();
-
-    out_.context().updateAdded(addon);
+    context().commitReject(toRej1.size() + toRej2.size());
   }
 
   void poll ()
@@ -55,50 +56,47 @@ public:
     size_t id;
     std::string_view data;
 
-    if(in_.pollRecv(id, data))
+    if(context().inSocket().pollRecv(id, data))
     {
-     char* buf = data.data();
-     size_t bytes = data.length();
+     const char* buf = data.data();
+     uint32_t bytes = data.length();
      ETH_HDR* h  = (struct ETH_HDR*) buf;
-     size_t diff = 0;
 
-      if ( in_.context().processingSYN(*h, bytes, out_.context()) )
+     uint32_t ackRecv = ntohl(h->ackNum);
+     uint32_t lenRecv = h->tcpLen();
+
+     context().updateOnRecv(lenRecv, ackRecv);
+
+      if (context().processingSYN(*h, bytes) )
       {
-        in_.context().prepare(data, out_.context(),in_.context().outTcp_);
-        in_.sendNoCopy(data);
-        in_.pollSend();
-        in_.context().updateRecvForSyn(*h);
+        context().sendPassPayloadNoCopyOrigSeqNums(data);
+        context().updateRecvForSyn(*h);
       }
-      else if (in_.context().processingDup(*h, diff))
+      else if (context().processingDup(*h))
       {
-        in_.context().prepareDup(data, out_.context(),in_.context().outTcp_, diff);
-        in_.sendNoCopy(data);
-        in_.pollSend();
+        context().processDup(data);
       }
       else // normal flow
       {
-         out_.context().processReceivedAck(ntohl(h->ackNum));
+         context().reversePathContext().processReceivedAck(ackRecv);
 
-         if (h->tcpLen() > 0 && !processor_.validate(*h))
+         if (lenRecv > 0 && !processor_.validate(*h))
          {
            std::string_view rejPayload = processor_.reject();
-           reject(data, rejPayload);
+           reject(data, lenRecv, rejPayload);
          }
          else
          {
-           in_.context().prepare(data, out_.context(),in_.context().outTcp_);
-           in_.sendNoCopy(data);
-           in_.pollSend();
+           context().sendPassPayloadNoCopy(data);
          }
 
-         in_.context().updateRecvNormal(*h);
+         context().updateRecvNormal(lenRecv, ackRecv);
       }
 
-      in_.postRecv();
+      context().inSocket().postRecv();
     }
  }
 public:
- InSocketType&  in_;
- OutSocketType& out_;
+ ContextType& context_;
  PayloadProcessor& processor_;
 };

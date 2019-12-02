@@ -142,6 +142,13 @@
       postRecv( (recvIdx_++) % cfg_.numOfRecvBuffers());
    }
 
+   std::string_view QPSocket::reserveSendBuf()
+   {
+        size_t bufIdx = (sendIdx_++) % cfg_.numOfSendBuffers();
+        auto* bufBegin = reinterpret_cast<char*>(sendBuf_) + cfg_.sendEntrySize() * bufIdx;
+        return std::string_view(bufBegin, cfg_.sendEntrySize());
+   }
+
    void QPSocket::postRecv(size_t workID)
    {
         ibv_sge sg_entry;

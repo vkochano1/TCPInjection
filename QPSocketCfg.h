@@ -36,7 +36,7 @@ public:
     decltype(auto) sourceMAC() const  { return  (sourceMAC_);}
     decltype(auto) destMAC()  const   { return  (destMAC_);}
 
-    void dump(std::ostream& out);
+    void dump(std::ostream& out) const;
     friend std::ostream& operator << (std::ostream& , const QPSocketCfg& cfg);
 
 public:

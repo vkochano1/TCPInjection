@@ -14,7 +14,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 
-
+const int32_t printEachN = 1;
 struct Sock
 {
   Sock(short port)
@@ -63,7 +63,7 @@ struct Sock
         int len = read(cs_, buf, sizeof(buf));
         if(len > 0 )
         {
-          if (c % 50000 == 0)
+          if (c % printEachN == 0)
           {
               std::cerr << "A Server received" << std::string(buf, len) << std::endl;
           }
@@ -111,10 +111,10 @@ struct CSock
         char buf[100];
         static size_t c = 0;
         int len = read(cs_, buf, sizeof(buf));
-        if(len > 0 && c % 5000 == 0)
+        if(len > 0)
         {
           c++;
-          if (c % 50000 == 0)
+          if (c % printEachN == 0)
             std::cerr << "A  Client Received" <<  std::string(buf, len) << std::endl;
         }
         return len > 0 ;
@@ -143,7 +143,9 @@ int main()
                 std::string buf = "PING_SERVER";
                 buf += std::to_string(idx++);
    			        ssock.recv();
+                std::cerr << " Server sent " << buf << '\n';
    			        ssock.send((char*)buf.c_str(), buf.length());
+
          }
 
 		  }
@@ -151,14 +153,16 @@ int main()
  );
 
  CSock g ("192.168.2.2", 5555);
- std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+ std::this_thread::sleep_for(std::chrono::milliseconds(2));
  size_t idx = 0;
  for(int i = 0; i < 10000000; )
  {
     std::string buf = "PING_CLIENT1234567890123456789012345678901234567890";
     buf += std::to_string(idx++);
     g.send((char*)buf.c_str(), buf.length());
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     g.recv();
+
  }
  thr->join();
  return 0;

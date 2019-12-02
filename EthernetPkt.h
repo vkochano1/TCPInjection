@@ -68,7 +68,7 @@ struct TCP : public IPv4
 
   size_t tcpLen()
   {
-       return  ntohs(totalLen) - ( f.hdrLen() + ipHLen())  * 4;
+       return  ntohs(totalLen) - ( f.hdrLen() + ipHLen() )  * 4;
   }
 
   uint16_t sp;
