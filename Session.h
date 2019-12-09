@@ -7,13 +7,17 @@
 #include <TcpStreamContext.h>
 #include <Utils.h>
 #include <TCPStream.h>
-
+#include <unordered_set>
 
 
 struct AlwaysValid
 {
   std::string_view reject() { return std::string_view();}
-  constexpr bool validate(const ETH_HDR&) {return true;}
+  bool validate(const std::string_view payload, uint32_t& processed)
+  {
+    processed = payload.size();
+    return true;
+  }
 };
 
 struct SomeReject
@@ -22,18 +26,31 @@ struct SomeReject
   {
     c_ = 1;
   }
-  std::string_view reject() { static std::string_view s ("REJECTED"); return s;}
-  constexpr bool validate(const ETH_HDR&)
+  std::string_view reject()
   {
-       if (c_++ % 2 == 0)
+    static std::string_view s ("REJECTED");
+    return s;
+  }
+
+  bool validate(const std::string_view payload, uint32_t& lenProcessed)
+  {
+       lenProcessed = payload.size();
+
+       mp_.insert(lenProcessed);
+
+       auto res = mp_.find(lenProcessed);
+
+       if (c_++ % 100000 == 0)
        {
-        std::cerr << "Rejected" << std::endl;
+          lenProcessed = payload.size() - 5;
+          std::cerr << "Rejected" << std::endl;
          return false;
        }
-      return true;
+       return true;
   }
 
   int c_;
+  std::unordered_set<uint32_t> mp_;
 };
 
 

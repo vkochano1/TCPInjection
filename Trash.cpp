@@ -160,7 +160,7 @@ int main()
     std::string buf = "PING_CLIENT1234567890123456789012345678901234567890";
     buf += std::to_string(idx++);
     g.send((char*)buf.c_str(), buf.length());
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    //std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     g.recv();
 
  }

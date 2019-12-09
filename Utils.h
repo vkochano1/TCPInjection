@@ -1,4 +1,6 @@
 #pragma once
+#include <iostream>
+
 #include <tins/utils/resolve_utils.h>
 #include <tins/packet_sender.h>
 #include <tins/network_interface.h>

@@ -320,6 +320,7 @@
     swr.wr_id = workID;
     swr.exp_send_flags |=  IBV_EXP_SEND_IP_CSUM;
     swr.exp_send_flags |=  IBV_SEND_SIGNALED;
+    //swr.exp_send_flags |=  IBV_EXP_SEND_INLINE;
 
     int ret = ibv_exp_post_send(queuePair_, &swr, &bad_swr);
 

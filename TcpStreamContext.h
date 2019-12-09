@@ -2,7 +2,7 @@
 
 #include <queue>
 #include <vector>
-#include <PendingTraffic.h>
+#include <InjectionsAndRejections.h>
 #include <QPSocket.h>
 #include <TcpStreamInfo.h>
 
@@ -81,7 +81,7 @@ public:
   {
     maxAckRecv_ = std::max(maxAckRecv_, ackReceived);
 
-    LOG("RECEIVED, NEEDED ACK for  " << expectedRecvSeq_ + payloadRecv << " ack to send " << currentOutAckSeq() );
+    //LOG("RECEIVED, NEEDED ACK for  " << expectedRecvSeq_ + payloadRecv << " ack to send " << currentOutAckSeq() );
   }
 
   void updateRecvForSyn(ETH_HDR& hdr)
@@ -100,19 +100,16 @@ public:
     uint32_t rejPayloadSeq = reversePathContext().currentOutSeq();
     if (reversePathContext().maxAckRecv_ == currentOutSeq() + seqOffset)
     {
-      LOG("Immediate reject");
       bytesRejectedAcked_ += payload.length();
       dontChange = true;
     }
-    else
-    {
-      LOG("Delayed reject");
-    }
 
     uint32_t cutOffSeq = currentOutSeq() + seqOffset;
-    uint32_t origSeq = currentOutSeq() + bytesProcessed;
+    //!!!!uint32_t origSeq = currentOutSeq() + bytesProcessed;
 
-    LOG("REJ data cut off seq"  << cutOffSeq );
+    uint32_t origSeq = expectedRecvSeq_ + bytesProcessed;
+
+    LOG("REJ data cut off seq "  <<  cutOffSeq );
 
     pendingInjections().addRejection(cutOffSeq, payload, rejPayloadSeq, rejPayload, dontChange, origSeq);
   }
@@ -126,7 +123,13 @@ public:
   {
     if (expectedRecvSeq_ >  ntohl(hdr.seqNum))
     {
-          LOG("DUP " <<  ntohl(hdr.seqNum) << " ,  "<< expectedRecvSeq_);
+          auto diff = expectedRecvSeq_ - ntohl(hdr.seqNum);
+          if (hdr.tcpLen() >  diff)
+          {
+            std::cerr << "can't process now "<< hdr.tcpLen() << " " <<  diff << std::endl;
+          }
+          LOG("DUP " <<  ntohl(hdr.seqNum) << " ,  "<< expectedRecvSeq_ << " ,  " << "diff  " << diff << " , " << hdr.tcpLen());
+
           return true;
     }
     return false;
@@ -162,9 +165,6 @@ private:
        pkt.setSrcMAC(streamInfo.sourceMAC().to_string());
        pkt.setDstMAC(streamInfo.destMAC().to_string());
 
-       //pkt.tcp().window(12000);
-       //pkt.tcp().winscale(1);
-
        pkt.setSeq(seqNum);
        pkt.setAckSeq(ackNum);
 
@@ -180,6 +180,7 @@ public:
   void sendPayload(const std::string_view& payload, bool noSend = false)
   {
     std::string_view out = outSocket().reserveSendBuf();
+
     prepareAddedPayload(payload, out);
 
     if (!noSend )
@@ -229,47 +230,25 @@ public:
 
   void processDup(std::string_view data)
   {
-    std::vector<InjectionDetails> rejectedIntervals;
+    LOG("Prev out seq " << currentOutSeq());
 
     ETH_HDR* hdr = (ETH_HDR*) data.data();
-
     uint32_t recvSeq = ntohl(hdr->seqNum);
-    uint32_t outSeq = pendingInjections().calculateSeqNumForDup(recvSeq, bytesAdded_, bytesRejected_, rejectedIntervals);
-
     std::string_view dupData( hdr->data(), hdr->tcpLen());
 
-    uint32_t dataProcessed = 0;
-    uint32_t passDataAdded = 0;
 
-    for (const auto& rejectedInterval : rejectedIntervals)
-    {
-      uint32_t intervalOrigSeqNum = rejectedInterval.myOrigSequence();
-
-      if (intervalOrigSeqNum > outSeq + dataProcessed)
+    pendingInjections().processDupPayload(recvSeq, dupData, bytesAdded_, bytesRejected_,
+      [this] (uint32_t seqNum, std::string_view payload)
       {
-          uint32_t toPassIntervalLen = intervalOrigSeqNum - outSeq - dataProcessed;
-          uint32_t toPassDataOutSequence = outSeq + passDataAdded;
-
-          std::string_view toReplay = dupData.substr(dataProcessed, toPassIntervalLen);
-          sendExactPayload(toReplay, toPassDataOutSequence);
-          dataProcessed += toReplay.size();
-          passDataAdded += toReplay.size();
-          LOG("Passthrough data:" << toReplay);
+        sendExactPayload( payload, seqNum);
+      }
+      ,
+      [this] (uint32_t seqNum, std::string_view payload)
+      {
+        reversePathContext().sendExactPayload(payload, seqNum);
       }
 
-      LOG("Rejected data:" << rejectedInterval.payload());
-      reversePathContext().sendExactPayload(rejectedInterval.rejPayload(), rejectedInterval.rejSeq());
-      dataProcessed += rejectedInterval.payload().size();
-    }
-
-    LOG ("Last passthrough data:" << dataProcessed  << " , len " <<  dupData.length());
-    if (dataProcessed < dupData.length() )
-    {
-      std::string_view toReplay = dupData.substr(dataProcessed);
-      LOG("Final pass through " << toReplay );
-
-      sendExactPayload(toReplay, outSeq + passDataAdded);
-    }
+    );
   }
 
 protected:
@@ -279,7 +258,7 @@ protected:
 
       if (payload.length())
       {
-        pendingInjections().addInjection(currentOutSeq(), payload);
+        pendingInjections().addInjection(currentOutSeq(), payload, expectedRecvSeq_);
         bytesAdded_ += payload.length();
       }
   }
