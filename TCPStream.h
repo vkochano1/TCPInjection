@@ -1,6 +1,7 @@
 #pragma once
 
 #include <TcpStreamContext.h>
+#include <ValidatorBase.h>
 
 template<typename ContextType, typename PayloadProcessor>
 class Stream
@@ -10,8 +11,7 @@ public:
      : context_(context)
      , processor_(processor)
   {
-    nPoints_ = 0;
-    avgRecvTime_ = 0;
+
   }
 
   ContextType& context()
@@ -19,97 +19,29 @@ public:
     return context_;
   }
 
-  void reject_(std::string_view payload, std::string_view rejPayload, uint32_t& seqOffset, uint32_t& bytesProcessed,  bool noSend)
-  {
-    context().updateReject(payload, rejPayload, seqOffset, bytesProcessed);
-    bytesProcessed += payload.size();
-    context().reversePathContext().sendPayload(rejPayload, noSend);
-  }
-
-  void pass_(std::string_view payload, uint32_t& seqOffset, uint32_t& bytesProcessed,  bool noSend)
-  {
-    context().sendPassPayload(payload, seqOffset, noSend);
-    bytesProcessed += payload.size();
-  }
-
-  void processNewData(std::string_view& pkt, std::string_view& payload)
-  {
-    bool valid = true;
-    uint32_t bytesRejected = 0;
-    uint32_t seqOffset = 0;
-    uint32_t bytesProcessed = 0;
-    uint32_t lenProcessed = 0;
-
-    do
-    {
-      valid = processor_.validate(payload, lenProcessed);
-
-      if (valid)
-      {
-        if (lenProcessed == payload.size() && !bytesRejected)
-        {
-          context().sendPassPayloadNoCopy(pkt);
-          endRecvTime_ =  Utils::rdtsc();
-          avgRecvTime_ = (avgRecvTime_ * nPoints_ + (endRecvTime_ - startRecvTime_)) / (nPoints_ + 1);
-
-          if (++nPoints_ % 50000)
-          {
-            LOG("AvgNumber of ticks " << avgRecvTime_ * 0.25641);
-            LOG("Last of ticks " << endRecvTime_ - startRecvTime_);
-          }
-        }
-        else
-        {
-          std::string_view toPass = payload.substr(0, lenProcessed);
-          pass_(toPass, seqOffset, bytesProcessed, false);
-        }
-      }
-      else
-      {
-        bytesRejected += lenProcessed;
-        std::string_view rejPayload = processor_.reject();
-        std::string_view toRej = payload.substr(0, lenProcessed);
-        reject_(toRej, rejPayload, seqOffset,  bytesProcessed, false);
-      }
-
-      payload.remove_prefix(lenProcessed);
-    } while(payload.size());
-
-    if (bytesRejected)
-    {
-       context().commitReject(bytesRejected);
-    }
-
-  }
-
   void poll ()
   {
     size_t id;
     std::string_view data;
-    size_t avg = 0;
-    size_t counter = 0;
 
     if(context().inSocket().pollRecv(id, data))
     {
-      startRecvTime_ =  Utils::rdtsc();
+     timer_.recordStart();
 
-     const char* buf = data.data();
-     uint32_t bytes = data.length();
-     ETH_HDR* h  = (struct ETH_HDR*) buf;
+     TCPPacketLite& tcpHeaderLite  = TCPPacketLite::fromData(data);
+     uint32_t ackRecv = tcpHeaderLite.ackNum();
+     uint32_t recvSeq = tcpHeaderLite.seqNum();
+     std::string_view payload = tcpHeaderLite.payload();
 
-     uint32_t ackRecv = ntohl(h->ackNum);
-     uint32_t lenRecv = h->tcpLen();
-     std::string_view payload = std::string_view(h->data(), lenRecv );
+     LOG("===========================  Received ==========================\n" << tcpHeaderLite);
 
-     //LOG("Received seq " << ntohl(h->seqNum) <<", ack " << ackRecv << ", len " << lenRecv << "======================================================");
-     context().updateOnRecv(lenRecv, ackRecv);
+     context().updateAckOnRecv(ackRecv);
 
-      if (context().processingSYN(*h, bytes) )
+      if (context().processingSYN(tcpHeaderLite, data) )
       {
         context().sendPassPayloadNoCopyOrigSeqNums(data);
-        context().updateRecvForSyn(*h);
       }
-      else if (context().processingDup(*h))
+      else if (context().isDup(recvSeq))
       {
         context().processDup(data);
       }
@@ -126,19 +58,115 @@ public:
            processNewData(data, payload);
          }
 
-         context().updateRecvNormal(lenRecv, ackRecv);
+         context().updateRecvNormal(tcpHeaderLite);
       }
 
       context().inSocket().postRecv();
     }
  }
-public:
+
+protected:
+
+  void reject_(std::string_view payload
+              , std::string_view rejPayload, uint32_t& seqOffset
+              , uint32_t& bytesProcessed
+              , bool noSend)
+  {
+    context().updateReject(payload, rejPayload, seqOffset, bytesProcessed);
+    bytesProcessed += payload.size();
+    context().reversePathContext().sendPayload(rejPayload, noSend);
+
+    LOG("Sent reject payload : " << rejPayload);
+  }
+
+  void pass_(std::string_view payload
+            , uint32_t& seqOffset
+            , uint32_t& bytesProcessed
+            ,  bool noSend)
+  {
+    context().sendPassPayload(payload, seqOffset, noSend);
+    bytesProcessed += payload.size();
+  }
+
+  void add_(std::string_view payload, bool noSend)
+  {
+    context().sendPostponedPayload(payload, noSend);
+  }
+
+  void processNewData(std::string_view& pkt, std::string_view& payload)
+  {
+    uint32_t bytesRejected = 0;
+    uint32_t seqOffset = 0;
+    uint32_t bytesProcessed = 0;
+
+    do
+    {
+      std::string_view addedPayload;
+      uint32_t lenProcessed = 0;
+
+      auto status = processor_.validate(payload, lenProcessed, addedPayload );
+
+      using StatusType = decltype(status);
+
+      if (status == StatusType::Valid)
+      {
+        if (   lenProcessed == payload.size()
+            && !bytesRejected)
+        {
+          context().sendPassPayloadNoCopy(pkt);
+          timer_.recordEnd();
+        }
+        else
+        {
+          std::string_view toPass = payload.substr(0, lenProcessed);
+          pass_(toPass, seqOffset, bytesProcessed, false);
+        }
+      }
+      else if (status == StatusType::Invalid)
+      {
+        bytesRejected += lenProcessed;
+        std::string_view rejPayload = addedPayload;
+        std::string_view toRej = payload.substr(0, lenProcessed);
+        reject_(toRej, rejPayload, seqOffset,  bytesProcessed, false);
+      }
+      else if (status == StatusType::PartialPayload)
+      {
+        // emulating reject with empty reject message
+        bytesRejected += lenProcessed;
+        std::string_view rejPayload;
+        std::string_view toRej = payload.substr(0, lenProcessed);
+
+        reject_(toRej, rejPayload, seqOffset,  bytesProcessed, false);
+
+        LOG("Partial message " << toRej << ". Don't process.");
+      }
+      else if (status == StatusType::PayloadAdded)
+      {
+        LOG("Payload added " << addedPayload);
+        add_(addedPayload, false);
+
+        if (lenProcessed)
+        {
+          std::string_view toPass = payload.substr(0, lenProcessed);
+          pass_(toPass, seqOffset, bytesProcessed, false);
+          LOG("Additional payload processed : " << toPass);
+        }
+      }
+
+      payload.remove_prefix(lenProcessed);
+    }
+    while(payload.size());
+
+    if (bytesRejected)
+    {
+       context().commitReject(bytesRejected);
+    }
+  }
+
+protected:
  ContextType& context_;
  PayloadProcessor& processor_;
+ Utils::DummyTimer timer_;
 
- size_t startRecvTime_;
- size_t endRecvTime_;
- size_t  avgRecvTime_;
- size_t nPoints_;
 
 };

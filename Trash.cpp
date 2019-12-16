@@ -59,13 +59,13 @@ struct Sock
   int recv()
   {
         static size_t c = 0;
-        char buf[100];
+        char buf[512];
         int len = read(cs_, buf, sizeof(buf));
         if(len > 0 )
         {
           if (c % printEachN == 0)
           {
-              std::cerr << "A Server received" << std::string(buf, len) << std::endl;
+              std::cerr << "Server received" << std::string(buf, len) << std::endl;
           }
         }
         c++;
@@ -108,7 +108,7 @@ struct CSock
 
   int recv()
   {
-        char buf[100];
+        char buf[512];
         static size_t c = 0;
         int len = read(cs_, buf, sizeof(buf));
         if(len > 0)
@@ -157,10 +157,16 @@ int main()
  size_t idx = 0;
  for(int i = 0; i < 10000000; )
  {
-    std::string buf = "PING_CLIENT1234567890123456789012345678901234567890";
+    std::string buf = "PING_CLIENT123456789012345678901234567";
     buf += std::to_string(idx++);
+    std::cerr << " Client sent " << buf << '\n';
     g.send((char*)buf.c_str(), buf.length());
-    //std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    //buf = "_SUFFIX";
+
+    //std::cerr << " Client sent " << buf << '\n';
+    //g.send((char*)buf.c_str(), buf.length());
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+
     g.recv();
 
  }

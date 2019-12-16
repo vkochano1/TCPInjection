@@ -16,8 +16,8 @@ QPSocketCfg::QPSocketCfg(const std::string& flowName)
   numOfRecvBuffers_ = 512;
   numOfSendBuffers_ = 512;
 
-  recvEntrySize_  = 1000;
-  sendEntrySize_  = 1000;
+  recvEntrySize_  = 1600;
+  sendEntrySize_  = 1600;
 
   destPort_  =  0;
   destPortMask_= 0;

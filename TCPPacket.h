@@ -4,7 +4,6 @@
 #include <tins/tins.h>
 #include <iostream>
 
-
 class TCPPacket
 {
 public:
@@ -81,20 +80,20 @@ public:
 
   void dump(std::ostream& ostrm)
   {
-      ostrm << "ETH: " <<  " Source:" << pkt_.src_addr()
-                        << ",Dest:"   << pkt_.dst_addr()
-                        << std::endl;
+      ostrm << "ETH: "   <<  " Source:" << pkt_.src_addr()
+                         << ",Dest:"   << pkt_.dst_addr()
+                         << std::endl;
 
-      ostrm << "TCP: " << " Source:" << ip_->src_addr() << ":" << tcp_->sport()
+      ostrm << "TCP: "    << " Source:" << ip_->src_addr() << ":" << tcp_->sport()
   		      << ",Dest:"   << ip_->dst_addr() << ":" << tcp_->dport()
             << ",Flags:"  << "S" << (bool)tcp_->get_flag(Tins::TCP::Flags::SYN)
-                                     << "A" << (bool)tcp_->get_flag(Tins::TCP::Flags::ACK)
-                                     << "F" << (bool)tcp_->get_flag(Tins::TCP::Flags::FIN)
-                                     << "R" << (bool)tcp_->get_flag(Tins::TCP::Flags::RST)
-             << "Seq:"     << "seq:" << tcp_->seq() <<"," << "ack:" << tcp_->ack_seq();
+                          << "A" << (bool)tcp_->get_flag(Tins::TCP::Flags::ACK)
+                          << "F" << (bool)tcp_->get_flag(Tins::TCP::Flags::FIN)
+                          << "R" << (bool)tcp_->get_flag(Tins::TCP::Flags::RST)
+             << "Seq:"  << tcp_->seq() <<"," << "ackSeq:" << tcp_->ack_seq();
      if(data_)
      {
-       ostrm << "Payload: " << std::string_view((const char*) &data_->payload()[0], data_->payload_size());
+       ostrm << "Payload: " << std::string_view(reinterpret_cast<const char*> (&data_->payload()[0]), data_->payload_size());
      }
 
      ostrm << std::endl;
@@ -103,6 +102,7 @@ public:
   Tins::IP& ip() {return *ip_;}
   Tins::TCP& tcp() {return *tcp_;}
   Tins::EthernetII& ether() {return pkt_;}
+
 private:
   Tins::EthernetII pkt_;
   Tins::IP* ip_;

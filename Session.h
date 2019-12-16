@@ -3,55 +3,14 @@
 #include <QPSocket.h>
 #include <TcpStreamInfo.h>
 #include <TCPPacket.h>
-#include <EthernetPkt.h>
+#include <TCPPacketLite.h>
 #include <TcpStreamContext.h>
 #include <Utils.h>
 #include <TCPStream.h>
 #include <unordered_set>
+#include <Validators.h>
 
 
-struct AlwaysValid
-{
-  std::string_view reject() { return std::string_view();}
-  bool validate(const std::string_view payload, uint32_t& processed)
-  {
-    processed = payload.size();
-    return true;
-  }
-};
-
-struct SomeReject
-{
-  SomeReject()
-  {
-    c_ = 1;
-  }
-  std::string_view reject()
-  {
-    static std::string_view s ("REJECTED");
-    return s;
-  }
-
-  bool validate(const std::string_view payload, uint32_t& lenProcessed)
-  {
-       lenProcessed = payload.size();
-
-       mp_.insert(lenProcessed);
-
-       auto res = mp_.find(lenProcessed);
-
-       if (c_++ % 100000 == 0)
-       {
-          lenProcessed = payload.size() - 5;
-          std::cerr << "Rejected" << std::endl;
-         return false;
-       }
-       return true;
-  }
-
-  int c_;
-  std::unordered_set<uint32_t> mp_;
-};
 
 
 class OutStream : public Stream<OutContext,AlwaysValid>

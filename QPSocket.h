@@ -1,7 +1,7 @@
 
 #pragma once
 
-#include <cstdlib>
+/*#include <cstdlib>
 #include <cstring>
 #include <unistd.h>
 #include <string>
@@ -13,10 +13,10 @@
 #include <sstream>
 #include <Utils.h>
 
-#include <TCPPacket.h>
+#include <TCPPacket.h>*/
+#include <Utils.h>
+
 #include <QPSocketCfg.h>
-
-
 
 
 struct ibv_context;
@@ -32,8 +32,6 @@ class Device final
    Device(const std::string& deviceName = std::string());
 
    operator ibv_context* ();
-   operator const ibv_context* () const;
-   
    const std::string& deviceName() const;
    ibv_context* context();
 private:

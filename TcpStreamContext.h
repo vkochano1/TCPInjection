@@ -1,11 +1,9 @@
 #pragma once
 
-#include <queue>
 #include <vector>
 #include <InjectionsAndRejections.h>
 #include <QPSocket.h>
 #include <TcpStreamInfo.h>
-
 
 template<typename SocketType>
 class Context
@@ -56,7 +54,6 @@ public:
   }
 
 public:
-
   void processReceivedAck(uint32_t ackNum)
   {
     pendingInjections().processReceivedAck(ackNum, bytesAddedAcked_, bytesRejectedAcked_);
@@ -72,21 +69,38 @@ public:
     return  maxAckRecv_ - reversePathContext().bytesAddedAcked_ + reversePathContext().bytesRejectedAcked_;
   }
 
-  void updateRecvNormal(uint32_t payloadRecv, uint32_t ackReceived)
+  void updateRecvNormal(TCPPacketLite& pkt)
   {
-    expectedRecvSeq_ += payloadRecv;
+    expectedRecvSeq_ += pkt.tcpLen();
   }
 
-  void updateOnRecv(uint32_t payloadRecv, uint32_t ackReceived)
+  void updateAckOnRecv(uint32_t ackReceived)
   {
     maxAckRecv_ = std::max(maxAckRecv_, ackReceived);
-
-    //LOG("RECEIVED, NEEDED ACK for  " << expectedRecvSeq_ + payloadRecv << " ack to send " << currentOutAckSeq() );
   }
 
-  void updateRecvForSyn(ETH_HDR& hdr)
+  void updateRecvSeqForSyn()
   {
     expectedRecvSeq_ += 1;
+  }
+
+  bool isDup(uint32_t seqNum) const
+  {
+    if (expectedRecvSeq_ > seqNum)
+    {
+      LOG("Processing duplicate. Expected seqNum is "
+          <<  expectedRecvSeq_
+          << " and received "
+          << seqNum
+         );
+      return true;
+    }
+    return false;
+  }
+
+  bool isNewFlow(uint32_t seqNum)  const
+  {
+    return expectedRecvSeq_ == seqNum;
   }
 
   void commitReject(uint32_t lenRecv)
@@ -105,39 +119,20 @@ public:
     }
 
     uint32_t cutOffSeq = currentOutSeq() + seqOffset;
-    //!!!!uint32_t origSeq = currentOutSeq() + bytesProcessed;
-
     uint32_t origSeq = expectedRecvSeq_ + bytesProcessed;
 
-    LOG("REJ data cut off seq "  <<  cutOffSeq );
+    LOG("Reject data cut off sequence " << cutOffSeq);
 
     pendingInjections().addRejection(cutOffSeq, payload, rejPayloadSeq, rejPayload, dontChange, origSeq);
   }
 
-  void setTargetEndpoint(const EndPoint& ep)
+  void setTargetEndpoint(const EndPoint& endpoint)
   {
-    target_ = ep;
-  }
-
-  bool processingDup(ETH_HDR& hdr)
-  {
-    if (expectedRecvSeq_ >  ntohl(hdr.seqNum))
-    {
-          auto diff = expectedRecvSeq_ - ntohl(hdr.seqNum);
-          if (hdr.tcpLen() >  diff)
-          {
-            std::cerr << "can't process now "<< hdr.tcpLen() << " " <<  diff << std::endl;
-          }
-          LOG("DUP " <<  ntohl(hdr.seqNum) << " ,  "<< expectedRecvSeq_ << " ,  " << "diff  " << diff << " , " << hdr.tcpLen());
-
-          return true;
-    }
-    return false;
+    target_ = endpoint;
   }
 
 private:
-
-  static void fillInfo(ETH_HDR& ethernetPkt,  const TcpStreamInfo& streamInfo)
+  static void fillInfo(TCPPacketLite& ethernetPkt,  const TcpStreamInfo& streamInfo)
   {
     streamInfo.fillSourceIP(&ethernetPkt.src_ip[0]);
     streamInfo.fillDestIP(&ethernetPkt.dst_ip[0]);
@@ -188,6 +183,23 @@ public:
       outSocket().sendNoCopy(out);
       outSocket().pollSend();
     }
+
+    LOG("Sent reject payload " << noSend << " " << TCPPacketLite::fromData(out));
+  }
+
+  void sendPostponedPayload(const std::string_view& payload, bool noSend = false)
+  {
+    std::string_view out = outSocket().reserveSendBuf();
+
+    preparePostponedPayload(payload, out);
+
+    if (!noSend )
+    {
+      outSocket().sendNoCopy(out);
+      outSocket().pollSend();
+    }
+
+    LOG("Sent postponed payload " << noSend << " " << TCPPacketLite::fromData(out));
   }
 
   void sendPassPayload(const std::string_view& payload, uint32_t& seqOffset, bool noSend = false)
@@ -200,6 +212,8 @@ public:
       outSocket().sendNoCopy(out);
       outSocket().pollSend();
     }
+
+    LOG("Sent pass payload : " << " " << TCPPacketLite::fromData(out));
   }
 
   void sendPassPayloadNoCopy(std::string_view& payload)
@@ -208,11 +222,13 @@ public:
     /// !!! Need to use the original QP, bz of the protection domain
     inSocket().sendNoCopy(payload);
     inSocket().pollSend();
+
+    LOG("Sent payload "<< " " << TCPPacketLite::fromData(payload));
   }
 
-  void sendPassPayloadNoCopyOrigSeqNums(const std::string_view& data)
+  void sendPassPayloadNoCopyOrigSeqNums(std::string_view& data)
   {
-    ETH_HDR& ethernetPkt  = const_cast<ETH_HDR&> (*reinterpret_cast<const ETH_HDR*> (data.data()));
+    TCPPacketLite& ethernetPkt  = TCPPacketLite::fromData(data);
     fillInfo(ethernetPkt, outTcp_);
 
     inSocket().sendNoCopy(data);
@@ -225,16 +241,17 @@ public:
     prepareSequencedPayload(payload,seq, out);
     outSocket().sendNoCopy(out);
     outSocket().pollSend();
+
+    LOG("Sent dup payload : "<< " " << TCPPacketLite::fromData(out));
   }
+
 public:
 
   void processDup(std::string_view data)
   {
-    LOG("Prev out seq " << currentOutSeq());
-
-    ETH_HDR* hdr = (ETH_HDR*) data.data();
-    uint32_t recvSeq = ntohl(hdr->seqNum);
-    std::string_view dupData( hdr->data(), hdr->tcpLen());
+    TCPPacketLite& hdr = TCPPacketLite::fromData(data);
+    uint32_t recvSeq = hdr.seqNum();
+    std::string_view dupData = hdr.payload();
 
 
     pendingInjections().processDupPayload(recvSeq, dupData, bytesAdded_, bytesRejected_,
@@ -247,7 +264,8 @@ public:
       {
         reversePathContext().sendExactPayload(payload, seqNum);
       }
-
+      ,
+      reversePathContext().maxAckRecv_
     );
   }
 
@@ -256,12 +274,24 @@ protected:
   {
       prepareSequencedPayload(payload,  currentOutSeq(), outData);
 
-      if (payload.length())
+      //if (payload.length())
       {
         pendingInjections().addInjection(currentOutSeq(), payload, expectedRecvSeq_);
         bytesAdded_ += payload.length();
       }
   }
+
+  void preparePostponedPayload(const std::string_view& payload, std::string_view& outData)
+  {
+      prepareSequencedPayload(payload,  currentOutSeq(), outData);
+
+      //if (payload.length())
+      {
+        pendingInjections().addInjection(currentOutSeq(), payload, expectedRecvSeq_ - payload.size());
+        bytesAdded_ += payload.length();
+      }
+  }
+
 
   void preparePassPayload (const std::string_view& payload, uint32_t& seqOffset, std::string_view& outData)
   {
@@ -281,10 +311,10 @@ protected:
 
   void preparePassPayloadNoCopy(std::string_view& data)
   {
-      ETH_HDR& ethernetPkt  = const_cast<ETH_HDR&> (*reinterpret_cast<const ETH_HDR*> (data.data()));
+      TCPPacketLite& ethernetPkt  = TCPPacketLite::fromData(data);
       fillInfo(ethernetPkt, outTcp_);
-      ethernetPkt.seqNum = htonl(currentOutSeq());
-      ethernetPkt.ackNum = htonl(currentOutAckSeq());
+      ethernetPkt.seqNum(currentOutSeq());
+      ethernetPkt.ackNum(currentOutAckSeq());
   }
 
 protected:
@@ -298,7 +328,7 @@ protected:
 protected:
   uint32_t expectedRecvSeq_;
 
-public:
+protected:
   mutable uint32_t maxAckRecv_;
 
 public:
@@ -325,40 +355,41 @@ public:
 
   }
 
-  bool processingSYN(ETH_HDR& hdr, uint32_t bytes)
+  bool processingSYN(TCPPacketLite& hdr, std::string_view& data)
   {
     if(hdr.f.syn())
     {
-      LOG("SYN Received");
+      LOG("SYN Received. Waiting for SYN ACK...");
 
       clear();
 
-      std::string_view pkt (reinterpret_cast<char*> (&hdr), bytes);
-      TCPPacket dumper(pkt);
+      TCPPacket pkt(data);
 
 
-      inTcp_.init(dumper.ether().src_addr(), dumper.ether().dst_addr(),
-                  dumper.ip().src_addr(), dumper.ip().dst_addr(),
-                  dumper.tcp().sport(), dumper.tcp().dport()
+      inTcp_.init(pkt.ether().src_addr(), pkt.ether().dst_addr(),
+                  pkt.ip().src_addr(), pkt.ip().dst_addr(),
+                  pkt.tcp().sport(), pkt.tcp().dport()
                 );
 
-      outTcp_.init(dumper.ether().dst_addr(), target_.outMac_,
-                   dumper.ip().dst_addr(), target_.outIP_,
-                   dumper.tcp().sport(), target_.outPort_
+      outTcp_.init(pkt.ether().dst_addr(), target_.outMac_,
+                   pkt.ip().dst_addr(), target_.outIP_,
+                   pkt.tcp().sport(), target_.outPort_
                  );
 
-      reversePathContext().outTcp_.init(dumper.ether().dst_addr(), dumper.ether().src_addr(),
-                              dumper.ip().dst_addr(), dumper.ip().src_addr(),
-                              dumper.tcp().dport(), dumper.tcp().sport()
+      reversePathContext().outTcp_.init(pkt.ether().dst_addr(), pkt.ether().src_addr(),
+                              pkt.ip().dst_addr(), pkt.ip().src_addr(),
+                              pkt.tcp().dport(), pkt.tcp().sport()
                             );
 
 
-      reversePathContext().inTcp_.init(target_.outMac_, dumper.ether().dst_addr(),
-                           target_.outIP_, dumper.ip().dst_addr(),
-                           target_.outPort_, dumper.tcp().sport()
+      reversePathContext().inTcp_.init(target_.outMac_, pkt.ether().dst_addr(),
+                           target_.outIP_, pkt.ip().dst_addr(),
+                           target_.outPort_, pkt.tcp().sport()
                          );
 
-      expectedRecvSeq_ = ntohl(hdr.seqNum);
+      expectedRecvSeq_ = hdr.seqNum();
+
+      updateRecvSeqForSyn();
 
       return true;
     }
@@ -380,15 +411,17 @@ public:
   {
   }
 
-  bool processingSYN(ETH_HDR& hdr, uint32_t bytes)
+  bool processingSYN(TCPPacketLite& hdr, std::string_view& data)
   {
     if(hdr.f.syn() && hdr.f.ack())
     {
-      LOG("SYN ACK Received. Session is established");
+      LOG("SYN ACK Received. TCP session is established.");
       clear();
-      expectedRecvSeq_ = ntohl(hdr.seqNum);
+      expectedRecvSeq_ = hdr.seqNum();
+      updateRecvSeqForSyn();
       return true;
     }
+
     return false;
   }
 };

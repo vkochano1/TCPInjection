@@ -149,8 +149,9 @@ void PendingInjections::processReceivedAck(uint32_t ackNum, uint32_t& bytesAcked
             {
               LOG("!!!!Bytes added acked changed by " << element.payloadSize() );
               bytesAcked  += element.payloadSize();
+
             }
-            else
+            else if (element.injectionType() == ChangeDetails::Reject)
             {
               if ( element.dontChange() == false )
               {
@@ -161,6 +162,10 @@ void PendingInjections::processReceivedAck(uint32_t ackNum, uint32_t& bytesAcked
               {
                 LOG("!!!No change");
               }
+            }
+            else
+            {
+               LOG("!!! Delayed was removed ");
             }
 
       }
@@ -188,6 +193,7 @@ std::pair<uint32_t, PendingInjections::IntervalRange > PendingInjections::calcul
     auto fit = intervals_.find(inSeq + payload.size());
     auto sit = intervals_.begin();
 
+    LOG(intervals_);
     for (auto it = intervals_.begin(); it != fit; ++it )
     {
         const auto& [i, elements] = *it;
@@ -206,10 +212,14 @@ std::pair<uint32_t, PendingInjections::IntervalRange > PendingInjections::calcul
             LOG("Out seq change + " << element.payloadSize());
 
           }
-          else
+          else if (element.injectionType() == ChangeDetails::Added)
           {
             LOG("Out seq change - " << element.payloadSize() );
             outSeq -= element.payloadSize();
+          }
+          else
+          {
+            LOG("Delayed Was calculated");
           }
         }
     }
@@ -231,14 +241,19 @@ void PendingInjections::addInjection(uint32_t seq, std::string_view payload, uin
 {
   ChangeDetails inj (ChangeDetails::Added, seq, payload, 0, std::string_view(), false, inSeq);
   std::set<ChangeDetails> v = {inj};
+  LOG("Before " << intervals_);
   intervals_ += std::make_pair(interval<uint32_t>::open(inSeq, inSeq + payload.size()), v);
   LOG("Added injection sequence  " << seq << ", with size " << payload.size());
+  LOG("After " << intervals_);
 }
+
 
 void PendingInjections::addRejection(uint32_t seq, std::string_view payload, uint32_t rejSeq, std::string_view rejP, bool dontChange , uint32_t origSeq)
 {
-  LOG("Rej seq " << seq << ", " << payload.size());
+  LOG("Added rejection sequence " << seq << ", " << payload.size());
   ChangeDetails inj(ChangeDetails::Reject, seq, payload, rejSeq, rejP, dontChange, origSeq);
   std::set<ChangeDetails> v = {inj};
+  LOG("Before " << intervals_);
   intervals_ += std::make_pair(interval<uint32_t>::open(origSeq, origSeq + payload.size()), v);
+  LOG("After " << intervals_);
 }

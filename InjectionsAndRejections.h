@@ -5,7 +5,7 @@
 #include <boost/icl/interval_map.hpp>
 #include <boost/icl/interval_map.hpp>
 
-using namespace boost::icl;
+
 
 class ChangeDetails
 {
@@ -42,8 +42,9 @@ public:
 
     uint32_t payloadSize() const;
 
-    bool split(uint32_t seq, std::string_view payload, std::string_view& left, std::string_view& right) const;
 
+public: // Interval keys
+    bool split(uint32_t seq, std::string_view payload, std::string_view& left, std::string_view& right) const;
     bool operator == (const ChangeDetails& interval) const;
     bool operator < (const ChangeDetails& interval) const;
 
@@ -59,9 +60,11 @@ private:
     std::string_view rejPayload_;
 };
 
+using namespace boost::icl; // ok no collisions expected
 
 struct PendingInjections
 {
+
   using  Intervals = interval_map<uint32_t, std::set<ChangeDetails> >;
   using  IntervalRange = std::pair<Intervals::const_iterator, Intervals::const_iterator>;
 
@@ -76,26 +79,27 @@ struct PendingInjections
   void processDupPayload(uint32_t recvSeq, std::string_view dupData
                       , uint32_t bytesAdded, uint32_t bytesRejected
                       , OnPassThroughPayload&& passFunctor
-                      , OnRejectedPayload&& rejFunctor )
+                      , OnRejectedPayload&& rejFunctor
+                      , uint32_t maxAck)
   {
 
-    /*if (outSeq + dupData.length() <= reversePathContext().maxAckRecv_)
+    const auto& [outSeq, range] = calculateSeqNumForDup(recvSeq, dupData, bytesAdded, bytesRejected);
+
+    if (outSeq + dupData.length() <= maxAck)
     {
-      LOG("Skipping dup bz " <<  reversePathContext().maxAckRecv_ << " >=  " << outSeq + dupData.length());
+      LOG("Skipping dup bz " <<  maxAck << " >=  " << outSeq + dupData.length());
       return ;
-    }*/
+    }
 
-    const auto& [outSeq, p] = calculateSeqNumForDup(recvSeq, dupData, bytesAdded, bytesRejected);
-    const auto& [sit, fit] = p;
-    LOG("Dup data " << dupData);
-
+    const auto& [sit, fit] = range;
+    LOG("Procesing dup data : " << dupData);
 
     uint32_t dataProcessed = 0;
     uint32_t passDataAdded = 0;
     uint32_t passDataRej = 0;
 
     uint32_t newSeq = outSeq;
-    uint32_t tmpRecv = recvSeq;
+    uint32_t curRecvSeq = recvSeq;
 
     Intervals& intervals = this->intervals();
 
@@ -107,9 +111,10 @@ struct PendingInjections
         std::string_view left;
         std::string_view right;
 
-        if(rejectedInterval.split(tmpRecv, dupData, left, right))
+        if(rejectedInterval.split(curRecvSeq, dupData, left, right))
         {
-          LOG("Split " <<  left << ", " << right);
+          LOG("Split dup data: left = " <<  left << " ,right = " << right);
+
           if (left.size())
           {
             passFunctor(newSeq + dataProcessed + passDataAdded - passDataRej, left);
@@ -121,18 +126,28 @@ struct PendingInjections
               passFunctor(rejectedInterval.outSeq() , rejectedInterval.payload());
               passDataAdded += rejectedInterval.payload().size();
           }
-          else
+          else if(rejectedInterval .injectionType() == ChangeDetails::Reject)
           {
               rejFunctor(rejectedInterval.rejSeq(), rejectedInterval.rejPayload());
               passDataRej += rejectedInterval.payload().size();
               dataProcessed += rejectedInterval.payload().size();
-              right = right.substr(rejectedInterval.payload().size());
+              if (right.size() >= rejectedInterval.payload().size())
+              {
+                right = right.substr(rejectedInterval.payload().size());
+              }
+              else
+              {
+                right = std::string_view();
+              }
+          }
+          else
+          {
+            assert(0);
           }
 
           dupData = right;
-          tmpRecv += dataProcessed;
-          LOG(tmpRecv << " " << dataProcessed);
-
+          curRecvSeq += dataProcessed;
+          LOG("Moving to seqNum  : " << curRecvSeq << "Dup data left : " << dupData );
         }
         else
         {
@@ -141,21 +156,19 @@ struct PendingInjections
       }
     }
 
-    LOG ("Last passthrough data:" << dataProcessed  << " , len " <<  dupData.length());
     if (dupData.length() )
     {
-      LOG(intervals);
+      LOG("Dup data left : " << dupData << "Passing through...");
       passFunctor(newSeq + dataProcessed + passDataAdded - passDataRej, dupData);
-
       dataProcessed += dupData.size();
     }
-
   }
 
   bool hasPendingInjections() const;
   void clear();
 
   void addInjection(uint32_t seq, std::string_view payload, uint32_t inSeq);
+  void addDelayed(uint32_t seq, std::string_view payload, uint32_t inSeq);
   void addRejection(uint32_t seq, std::string_view payload, uint32_t rejSeq, std::string_view rejP, bool dontChange , uint32_t origSeq);
 
 private:
