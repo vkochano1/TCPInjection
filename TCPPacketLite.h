@@ -77,6 +77,11 @@ struct TCP : public IPv4
        return  ntohs(totalLen) - ( f.hdrLen() + ipHLen() )  * 4;
   }
 
+  uint16_t winSize() const
+  {
+       return  ntohs(windowSize);
+  }
+
   uint32_t seqNum() const
   {
       return ntohl(seqNum_);
@@ -129,7 +134,7 @@ struct TCPPacketLite : public TCP
     //ostrm << "PktType:" << ntohs(pkttype) << std::endl;
     //ostrm << "TotalLen:" << ntohs(totalLen) << std::endl;
     ostrm << "SourceAddr:" << pkt.printIP(pkt.src_ip, pkt.sp) << " , DestAddr:" << pkt.printIP(pkt.dst_ip, pkt.dp) << std::endl;
-    ostrm << "SeqNum: " << pkt.seqNum() << " , AckNum:" << pkt.ackNum() << std::endl;
+    ostrm << "SeqNum: " << pkt.seqNum() << " , AckNum:" << pkt.ackNum() << ", Win " << pkt.winSize() << std::endl;
     //ostrm << "TCPLen: " << tcpLen() << std::endl;
     //ostrm << "IPHLen: " << ipHLen() << std::endl;
     //ostrm << "Flags: SYN(" << f.syn() << ") , FIN("<< f.fin() << ") , ACK(" << f.ack() << ")" << std::endl;

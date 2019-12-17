@@ -41,9 +41,15 @@ public:
       {
         context().sendPassPayloadNoCopyOrigSeqNums(data);
       }
-      else if (context().isDup(recvSeq))
+      else if (context().isDup(recvSeq, payload))
       {
+        context().reversePathContext().processReceivedAck(ackRecv);
+
         context().processDup(data);
+      }
+      else if (context().isHigher(recvSeq))
+      {
+        assert(0);
       }
       else // normal flow
       {
@@ -86,11 +92,6 @@ protected:
   {
     context().sendPassPayload(payload, seqOffset, noSend);
     bytesProcessed += payload.size();
-  }
-
-  void add_(std::string_view payload, bool noSend)
-  {
-    context().sendPostponedPayload(payload, noSend);
   }
 
   void processNewData(std::string_view& pkt, std::string_view& payload)
@@ -143,7 +144,11 @@ protected:
       else if (status == StatusType::PayloadAdded)
       {
         LOG("Payload added " << addedPayload);
-        add_(addedPayload, false);
+
+        if (!lenProcessed)
+          context().sendPayload(payload, false);
+        else
+          context().sendPostponedPayload(payload, false);
 
         if (lenProcessed)
         {

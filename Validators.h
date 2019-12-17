@@ -38,11 +38,11 @@ struct SomeReject : public ValidatorBase<SomeReject>
    : ValidatorBase<SomeReject>(*this)
   {
     step_             = 1;
-    rejectAt_         = 5;
+    rejectAt_         = 31;
     passBytesAtReject_ = 5;
-    addPayloadAt_     = 37;
+    addPayloadAt_     = 71;
 
-    partialPayloadAt_ = 19;
+    partialPayloadAt_ = 39;
   }
 
   constexpr bool isCompleteMessage_(std::string_view& storedPayload
@@ -91,6 +91,7 @@ struct SomeReject : public ValidatorBase<SomeReject>
                     , std::string_view& outPayload)
   {
     ++step_;
+    return Status::Valid;
 
     if (step_ % rejectAt_ == 0)
     {

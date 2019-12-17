@@ -65,7 +65,7 @@ struct Sock
         {
           if (c % printEachN == 0)
           {
-              std::cerr << "Server received" << std::string(buf, len) << std::endl;
+              //std::cerr << "Server received" << std::string(buf, len) << std::endl;
           }
         }
         c++;
@@ -113,9 +113,12 @@ struct CSock
         int len = read(cs_, buf, sizeof(buf));
         if(len > 0)
         {
-          c++;
-          if (c % printEachN == 0)
-            std::cerr << "A  Client Received" <<  std::string(buf, len) << std::endl;
+          //std::cerr << "Client Received" <<  std::string(buf, len) << std::endl;
+        }
+        else
+        {
+          std::cerr << "Issue";
+          std::exit(0);
         }
         return len > 0 ;
   }
@@ -140,10 +143,10 @@ int main()
          size_t idx = 0;
          while(1)
  		     {
-                std::string buf = "PING_SERVER";
+                std::string buf = "S_";
                 buf += std::to_string(idx++);
    			        ssock.recv();
-                std::cerr << " Server sent " << buf << '\n';
+                //std::cerr << "Server sent " << buf << '\n';
    			        ssock.send((char*)buf.c_str(), buf.length());
 
          }
@@ -159,14 +162,9 @@ int main()
  {
     std::string buf = "PING_CLIENT123456789012345678901234567";
     buf += std::to_string(idx++);
-    std::cerr << " Client sent " << buf << '\n';
+    //std::cerr << "Client sent " << buf << '\n';
     g.send((char*)buf.c_str(), buf.length());
-    //buf = "_SUFFIX";
-
-    //std::cerr << " Client sent " << buf << '\n';
-    //g.send((char*)buf.c_str(), buf.length());
-    std::this_thread::sleep_for(std::chrono::milliseconds(2));
-
+    //std::this_thread::sleep_for(std::chrono::milliseconds(2));
     g.recv();
 
  }

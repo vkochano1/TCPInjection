@@ -11,8 +11,6 @@
 #include <Validators.h>
 
 
-
-
 class OutStream : public Stream<OutContext,AlwaysValid>
 {
 public:

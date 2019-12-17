@@ -4,7 +4,7 @@
 #include <boost/icl/map.hpp>
 #include <boost/icl/interval_map.hpp>
 #include <boost/icl/interval_map.hpp>
-
+#include <deque>
 
 
 class ChangeDetails
@@ -65,7 +65,7 @@ using namespace boost::icl; // ok no collisions expected
 struct PendingInjections
 {
 
-  using  Intervals = interval_map<uint32_t, std::set<ChangeDetails> >;
+  using  Intervals = std::deque<ChangeDetails>;
   using  IntervalRange = std::pair<Intervals::const_iterator, Intervals::const_iterator>;
 
   PendingInjections();
@@ -76,7 +76,7 @@ struct PendingInjections
 
 
   template <typename OnPassThroughPayload, typename OnRejectedPayload>
-  void processDupPayload(uint32_t recvSeq, std::string_view dupData
+  bool processDupPayload(uint32_t recvSeq, std::string_view dupData
                       , uint32_t bytesAdded, uint32_t bytesRejected
                       , OnPassThroughPayload&& passFunctor
                       , OnRejectedPayload&& rejFunctor
@@ -85,11 +85,11 @@ struct PendingInjections
 
     const auto& [outSeq, range] = calculateSeqNumForDup(recvSeq, dupData, bytesAdded, bytesRejected);
 
-    if (outSeq + dupData.length() <= maxAck)
+  /*  if (recvSeq + dupData.length() <= maxAck)
     {
       LOG("Skipping dup bz " <<  maxAck << " >=  " << outSeq + dupData.length());
-      return ;
-    }
+      return  true;
+    }*/
 
     const auto& [sit, fit] = range;
     LOG("Procesing dup data : " << dupData);
@@ -105,11 +105,20 @@ struct PendingInjections
 
     for (auto it = sit ; it != fit ; ++ it  )
     {
+        const auto& rejectedInterval = *it;
 
-      for (const auto& rejectedInterval : it->second)
-      {
         std::string_view left;
         std::string_view right;
+
+        LOG("Distance " << std::distance(it, fit));
+        LOG("Checkig " <<  rejectedInterval);
+
+        if(rejectedInterval .injectionType() == ChangeDetails::Added && curRecvSeq > rejectedInterval.inSeq())
+        {
+            passFunctor(rejectedInterval.outSeq() , rejectedInterval.payload());
+            passDataAdded += rejectedInterval.payload().size();
+            continue;
+        }
 
         if(rejectedInterval.split(curRecvSeq, dupData, left, right))
         {
@@ -153,7 +162,6 @@ struct PendingInjections
         {
           break;
         }
-      }
     }
 
     if (dupData.length() )
@@ -162,13 +170,13 @@ struct PendingInjections
       passFunctor(newSeq + dataProcessed + passDataAdded - passDataRej, dupData);
       dataProcessed += dupData.size();
     }
+    return false;
   }
 
   bool hasPendingInjections() const;
   void clear();
 
   void addInjection(uint32_t seq, std::string_view payload, uint32_t inSeq);
-  void addDelayed(uint32_t seq, std::string_view payload, uint32_t inSeq);
   void addRejection(uint32_t seq, std::string_view payload, uint32_t rejSeq, std::string_view rejP, bool dontChange , uint32_t origSeq);
 
 private:
@@ -177,6 +185,5 @@ private:
                                 , uint32_t bytesAlreadyAdded
                                 , uint32_t bytesAlreadyRejected);
 private:
-  Intervals  intervals_;
-
+  Intervals intervals_;
 };

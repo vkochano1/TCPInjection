@@ -84,7 +84,7 @@ public:
     expectedRecvSeq_ += 1;
   }
 
-  bool isDup(uint32_t seqNum) const
+  bool isDup(uint32_t seqNum, const std::string_view& payload) const
   {
     if (expectedRecvSeq_ > seqNum)
     {
@@ -93,10 +93,22 @@ public:
           << " and received "
           << seqNum
          );
+
+      if (payload.size() + seqNum > expectedRecvSeq_ )
+      {
+        std::exit(0);
+      }
       return true;
     }
+
     return false;
   }
+
+  bool isHigher(uint32_t seqNum)  const
+  {
+    return expectedRecvSeq_ <  seqNum;
+  }
+
 
   bool isNewFlow(uint32_t seqNum)  const
   {
@@ -160,6 +172,7 @@ private:
        pkt.setSrcMAC(streamInfo.sourceMAC().to_string());
        pkt.setDstMAC(streamInfo.destMAC().to_string());
 
+       pkt.tcp().window(444);
        pkt.setSeq(seqNum);
        pkt.setAckSeq(ackNum);
 
@@ -186,6 +199,18 @@ public:
 
     LOG("Sent reject payload " << noSend << " " << TCPPacketLite::fromData(out));
   }
+
+  void sendAck()
+  {
+    std::string_view out = outSocket().reserveSendBuf();
+
+    std::string_view payload;
+    prepareAddedPayload(payload, out);
+    outSocket().sendNoCopy(out);
+    outSocket().pollSend();
+    LOG("Sent ack " << TCPPacketLite::fromData(out));
+  }
+
 
   void sendPostponedPayload(const std::string_view& payload, bool noSend = false)
   {
@@ -254,7 +279,7 @@ public:
     std::string_view dupData = hdr.payload();
 
 
-    pendingInjections().processDupPayload(recvSeq, dupData, bytesAdded_, bytesRejected_,
+    bool noRsend = pendingInjections().processDupPayload(recvSeq, dupData, bytesAdded_, bytesRejected_,
       [this] (uint32_t seqNum, std::string_view payload)
       {
         sendExactPayload( payload, seqNum);
@@ -265,8 +290,13 @@ public:
         reversePathContext().sendExactPayload(payload, seqNum);
       }
       ,
-      reversePathContext().maxAckRecv_
+      reversePathContext().currentOutAckSeq()
     );
+
+    if (noRsend)
+    {
+      reversePathContext().sendAck();
+    }
   }
 
 protected:

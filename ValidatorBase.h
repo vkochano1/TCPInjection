@@ -66,5 +66,5 @@ public:
 protected:
   std::string_view storedPayload_;
   Validator& validator_;
-  std::array<char, 2048> buffer_;
+  std::array<char, 12048> buffer_;
 };
