@@ -24,6 +24,7 @@
 
         device = devList[0];
      }
+     // !!! do device by name
      context_ = ibv_open_device(device);
      deviceName_ = deviceName;
    }
@@ -296,12 +297,17 @@
         return false;
    }
 
+   bool QPSocket::pollRecv(std::string_view& data)
+   {
+        size_t workID; // unused
+        return pollRecv(workID, data);
+   }
+
   void QPSocket::pollSend()
   {
      ibv_wc completion;
      int msgs_completed = ibv_poll_cq(sendCompletionQueue_, 1, &completion);
   }
-
 
   void QPSocket::sendNoCopy(const std::string_view& data, size_t workID)
   {

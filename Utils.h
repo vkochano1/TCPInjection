@@ -60,7 +60,7 @@ namespace Utils
       endRecvTime_ =  Utils::rdtsc();
       avgRecvTime_ = (avgRecvTime_ * nPoints_ + (endRecvTime_ - startRecvTime_)) / (nPoints_ + 1);
 
-      if (++nPoints_ % 1000000 == 0)
+      if (++nPoints_ % 100000 == 0)
       {
         LOG_ALWAYS("Avg ns:" << avgRecvTime_ * 0.25641);
       }

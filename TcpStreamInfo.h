@@ -99,7 +99,6 @@ public:
     }
 
 public:
-
     const IP& sourceIP() const  { return (sourceIP_);}
     const IP& destIP() const  { return (destIP_);}
 

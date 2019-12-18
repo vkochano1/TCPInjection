@@ -8,12 +8,12 @@ struct flags
 {
    uint16_t hdrLen () const  { return (ntohs(val_) & 0xF000) >>  12;}
 
-   bool  urg  ()  const   {  return ntohs(val_) & 32;  }
-   bool  ack  ()  const  { return ntohs(val_) & 16;    }
-   bool  push ()  const  { return ntohs(val_) & 0x8;   }
-   bool  rst  ()  const  { return ntohs(val_) & 0x4;   }
-   bool  syn  ()  const { return ntohs(val_) & 0x2;    }
-   bool  fin  ()  const { return ntohs(val_) & 0x1;    }
+   bool  urg  ()  const   {  return ntohs(val_) & 32;   }
+   bool  ack  ()  const   { return ntohs(val_) & 16;    }
+   bool  push ()  const   { return ntohs(val_) & 0x8;   }
+   bool  rst  ()  const   { return ntohs(val_) & 0x4;   }
+   bool  syn  ()  const   { return ntohs(val_) & 0x2;   }
+   bool  fin  ()  const   { return ntohs(val_) & 0x1;   }
 
    uint16_t val_;
 };

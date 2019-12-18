@@ -1,23 +1,8 @@
 
 #pragma once
 
-/*#include <cstdlib>
-#include <cstring>
-#include <unistd.h>
-#include <string>
-#include <tins/ethernetII.h>
-#include <tins/tins.h>
-#include <memory>
-
-#include <iostream>
-#include <sstream>
 #include <Utils.h>
-
-#include <TCPPacket.h>*/
-#include <Utils.h>
-
 #include <QPSocketCfg.h>
-
 
 struct ibv_context;
 struct ibv_pd;
@@ -51,7 +36,9 @@ public:
 public:
    void postRecv(size_t workID);
    void postRecv();
+
    bool pollRecv(size_t& workID, std::string_view& data);
+   bool pollRecv(std::string_view& data);
 
 public:
    void sendNoCopy(const std::string_view& data, size_t workID = 0);
