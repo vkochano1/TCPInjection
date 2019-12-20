@@ -38,7 +38,8 @@ public:
 
       if (context().processingSYN(tcpHeaderLite, data) )
       {
-        context().sendPassPayloadNoCopyOrigSeqNums(data);
+        context().sendWithRemovedOptions(data);
+        //context().sendPassPayloadNoCopyOrigSeqNums(data);
       }
       else if (context().isNewFlow(recvSeq))
       {
@@ -137,7 +138,7 @@ protected:
       }
       else if (StatusType::PayloadAdded == status)
       {
-        LOG("Payload added :" << addedPayload);
+        LOG("Payload added :" << outPayload);
 
         if (!lenProcessed)
           context().sendPayload(payload);

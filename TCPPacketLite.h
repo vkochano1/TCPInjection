@@ -138,7 +138,7 @@ struct TCPPacketLite : public TCP
     //ostrm << "TCPLen: " << tcpLen() << std::endl;
     //ostrm << "IPHLen: " << ipHLen() << std::endl;
     //ostrm << "Flags: SYN(" << f.syn() << ") , FIN("<< f.fin() << ") , ACK(" << f.ack() << ")" << std::endl;
-    //ostrm << "HdrLen: " << f.hdrLen() <<  std::endl;
+    //ostrm << "HdrLen: :" << pkt.printIP(pkt.src_ip, pkt.sp) << " , DestAddr:" << pkt.printIP(pkt.dst_ip, pkt.dp) << std::endl;
 
     ostrm << "Data:" << std::string_view(pkt.data(), pkt.tcpLen()) << std::endl;
     return ostrm;

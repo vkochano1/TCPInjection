@@ -13,7 +13,7 @@
 
 #define LOG_THROW(EX,TEXT)\
     do { LOG(TEXT); throw EX(TEXT);} while(0)
-#define LOG(TEXT)
+//#define LOG(TEXT)
 
 namespace Utils
 {

@@ -145,7 +145,38 @@ public:
   {
     target_ = endpoint;
   }
+
 public:
+  void sendWithRemovedOptions(std::string_view& pkt)
+  {
+    TCPPacket tcpPacket (pkt);
+
+    for (auto option :  {Tins::TCP::EOL
+                        , Tins::TCP::NOP
+                        , Tins::TCP::MSS
+                        , Tins::TCP::WSCALE
+                        , Tins::TCP::SACK_OK
+                        , Tins::TCP::SACK
+                        , Tins::TCP::TSOPT
+                        , Tins::TCP::ALTCHK
+                        , Tins::TCP::RFC_EXPERIMENT_1
+                        , Tins::TCP::RFC_EXPERIMENT_2 } )
+    {
+      tcpPacket.tcp().remove_option(option);
+    }
+
+
+    tcpPacket.setSource(outTcp_.source());
+    tcpPacket.setDest(outTcp_.dest());
+
+    std::string_view outData = outSocket().reserveSendBuf();
+
+    prepareOutPayloadImpl(tcpPacket,outData);
+    outSocket().sendNoCopy(outData);
+    outSocket().pollSend();
+    tcpPacket.dump(std::cerr);
+  }
+
   void sendPayload(const std::string_view& payload, bool noSend = false)
   {
     std::string_view out = outSocket().reserveSendBuf();
@@ -291,14 +322,14 @@ protected:
 protected:
   static void fillInfo(TCPPacketLite& ethernetPkt,  const TcpStreamInfo& streamInfo)
   {
-    streamInfo.fillSourceIP(&ethernetPkt.src_ip[0]);
-    streamInfo.fillDestIP(&ethernetPkt.dst_ip[0]);
+    streamInfo.source().fillIP(&ethernetPkt.src_ip[0]);
+    streamInfo.dest().fillIP(&ethernetPkt.dst_ip[0]);
 
-    streamInfo.fillSourceMAC(&ethernetPkt.src_mac[0]);
-    streamInfo.fillDestMAC(&ethernetPkt.dst_mac[0]);
+    streamInfo.source().fillMAC(&ethernetPkt.src_mac[0]);
+    streamInfo.dest().fillMAC(&ethernetPkt.dst_mac[0]);
 
-    streamInfo.fillSourcePort(ethernetPkt.sp);
-    streamInfo.fillDestPort(ethernetPkt.dp);
+    streamInfo.source().fillPort(ethernetPkt.sp);
+    streamInfo.dest().fillPort(ethernetPkt.dp);
   }
 
   static void prepareOutPayloadImpl (const std::string_view& payload
@@ -308,27 +339,26 @@ protected:
                   , std::string_view& outData)
   {
        TCPPacket pkt;
-       pkt.setSrcIP(streamInfo.sourceIP().to_string());
-       pkt.setDstIP(streamInfo.destIP().to_string());
 
-       pkt.setSrcPort(streamInfo.sourcePort());
-       pkt.setDstPort(streamInfo.destPort());
-
-       pkt.setSrcMAC(streamInfo.sourceMAC().to_string());
-       pkt.setDstMAC(streamInfo.destMAC().to_string());
+       pkt.setSource(streamInfo.source());
+       pkt.setDest(streamInfo.dest());
 
        pkt.tcp().window(666); // WindowSize to scare tcp stack
+
        pkt.setSeq(seqNum);
        pkt.setAckSeq(ackNum);
 
        pkt.setData(payload.data(), payload.length());
 
-       auto serialized = pkt.ether().serialize();
-
-       std::memcpy(const_cast<char*>(outData.data()), &serialized[0], serialized.size());
-       outData.remove_suffix(outData.size() - serialized.size());
+       prepareOutPayloadImpl(pkt, outData);
   }
 
+  static void prepareOutPayloadImpl(TCPPacket& pkt, std::string_view& outData)
+  {
+    auto serialized = pkt.ether().serialize();
+    std::memcpy(const_cast<char*>(outData.data()), &serialized[0], serialized.size());
+    outData.remove_suffix(outData.size() - serialized.size());
+  }
 protected:
   uint32_t bytesRejected_;
   uint32_t bytesRejectedAcked_;
@@ -375,26 +405,16 @@ public:
 
       TCPPacket pkt(data);
 
-      inTcp_.init(pkt.ether().src_addr(), pkt.ether().dst_addr(),
-                  pkt.ip().src_addr(), pkt.ip().dst_addr(),
-                  pkt.tcp().sport(), pkt.tcp().dport()
-                );
+      EndPoint clientSource {pkt.ether().src_addr(), pkt.ip().src_addr(), pkt.tcp().sport() };
+      EndPoint clientDest {pkt.ether().dst_addr(), pkt.ip().dst_addr(), pkt.tcp().dport()};
 
-      outTcp_.init(pkt.ether().dst_addr(), target_.outMac_,
-                   pkt.ip().dst_addr(), target_.outIP_,
-                   pkt.tcp().sport(), target_.outPort_
-                 );
+      EndPoint myServerSource {pkt.ether().dst_addr(), pkt.ip().dst_addr(), pkt.tcp().sport()};
 
-      reversePathContext().outTcp_.init(pkt.ether().dst_addr(), pkt.ether().src_addr(),
-                              pkt.ip().dst_addr(), pkt.ip().src_addr(),
-                              pkt.tcp().dport(), pkt.tcp().sport()
-                            );
+      inTcp_.init(clientSource, clientDest);
+      outTcp_.init(myServerSource, target_);
 
-
-      reversePathContext().inTcp_.init(target_.outMac_, pkt.ether().dst_addr(),
-                           target_.outIP_, pkt.ip().dst_addr(),
-                           target_.outPort_, pkt.tcp().sport()
-                         );
+      reversePathContext().inTcp_.init(target_, myServerSource);
+      reversePathContext().outTcp_.init(clientDest, clientSource);
 
       expectedRecvSeq_ = hdr.seqNum() + 1;
       return true;

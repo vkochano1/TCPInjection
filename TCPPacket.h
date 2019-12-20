@@ -3,6 +3,7 @@
 #include <tins/ethernetII.h>
 #include <tins/tins.h>
 #include <iostream>
+#include <TcpStreamInfo.h>
 
 class TCPPacket
 {
@@ -29,38 +30,18 @@ public:
     data_ = tcp_->find_pdu<Tins::RawPDU>();
   }
 
-  void setSrcMAC (const std::string& addr)
+  void setSource (const EndPoint& endPoint)
   {
-    Tins::HWAddress<6> mac(addr);
-    pkt_.src_addr(mac);
+    pkt_.src_addr(endPoint.mac());
+    ip_->src_addr(endPoint.ip());
+    tcp_->sport(endPoint.port());
   }
 
-  void setDstMAC (const std::string& addr)
+  void setDest (const EndPoint& endPoint)
   {
-    Tins::HWAddress<6> mac(addr);
-    pkt_.dst_addr(mac);
-  }
-
-  void setSrcIP(const std::string& addr)
-  {
-    Tins::IPv4Address ipv4 (addr);
-    ip_->src_addr(ipv4);
-  }
-
-  void setDstIP(const std::string& addr)
-  {
-    Tins::IPv4Address ipv4 (addr);
-    ip_->dst_addr(ipv4);
-  }
-
-  void setSrcPort(uint16_t port)
-  {
-    tcp_->sport(port);
-  }
-
-  void setDstPort(uint16_t port)
-  {
-    tcp_->dport(port);
+    pkt_.dst_addr(endPoint.mac());
+    ip_->dst_addr(endPoint.ip());
+    tcp_->dport(endPoint.port());
   }
 
   void setData(const char* buf, size_t len)
@@ -91,6 +72,7 @@ public:
                           << "F" << (bool)tcp_->get_flag(Tins::TCP::Flags::FIN)
                           << "R" << (bool)tcp_->get_flag(Tins::TCP::Flags::RST)
              << "Seq:"  << tcp_->seq() <<"," << "ackSeq:" << tcp_->ack_seq();
+
      if(data_)
      {
        ostrm << "Payload: " << std::string_view(reinterpret_cast<const char*> (&data_->payload()[0]), data_->payload_size());
